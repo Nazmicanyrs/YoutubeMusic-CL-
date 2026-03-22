@@ -10,6 +10,8 @@ __pycache__/
 
 # Kişisel veriler
 playlists.json
+history.json
+settings.json
 
 # IDE ve Editör ayarları
 .vscode/
