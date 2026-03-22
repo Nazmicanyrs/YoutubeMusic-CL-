@@ -1,0 +1,21 @@
+# Çalışma ortamları
+venv/
+env/
+.env
+
+# Python önbellek dosyaları
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Kişisel veriler
+playlists.json
+
+# IDE ve Editör ayarları
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# MacOS
+.DS_Store
