@@ -27,7 +27,7 @@ Terminal veya CMD açarak projeyi klonlayın ve bağımlılıklarını kurun:
 
 ```bash
 # Projeyi indirin
-git clone https://github.com/KULLANICI_ADINIZ/ytm-cli.git
+git clone https://github.com/Nazmicanyrs/YoutubeMusic-CL-
 cd ytm-cli
 
 # Python sanal ortamını oluşturun ve aktif edin
