@@ -55,9 +55,12 @@ playlist_manager = PlaylistManager()
 def load_settings():
     try:
         with open("settings.json", "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            if "theme" not in data: data["theme"] = "Spotify"
+            if "normalization" not in data: data["normalization"] = True
+            return data
     except:
-        return {"notifications_enabled": True}
+        return {"notifications_enabled": True, "theme": "Spotify", "normalization": True}
 
 def save_settings():
     try:
@@ -67,6 +70,7 @@ def save_settings():
         pass
 
 app_settings = load_settings()
+player.set_normalization(app_settings.get("normalization", True))
 
 def load_history():
     try:
@@ -86,17 +90,84 @@ def save_history(query):
     except:
         pass
 
-custom_style = get_style(
-    {
-        "questionmark": "#e5c07b bold",
-        "answer": "#61afef bold",
-        "input": "#98c379",
-        "pointer": "#e5c07b bold",
-        "marker": "#e5c07b",
-        "instruction": "#abb2bf",
+THEMES = {
+    "Spotify": {
+        "primary": "#1DB954",
+        "secondary": "#191414",
+        "text": "white",
+        "pointer": "> ",
+        "style_overrides": {
+            "questionmark": "#1DB954 bold",
+            "answer": "#1db954 bold",
+            "input": "white",
+            "pointer": "#1DB954 bold",
+            "marker": "#1DB954",
+            "instruction": "dim white",
+        }
     },
-    style_override=False,
-)
+    "Youtube Music": {
+        "primary": "#FF0000",
+        "secondary": "#212121",
+        "text": "white",
+        "pointer": "► ",
+        "style_overrides": {
+            "questionmark": "#FF0000 bold",
+            "answer": "#FF0000 bold",
+            "input": "white",
+            "pointer": "#FF0000 bold",
+            "marker": "#FF0000",
+            "instruction": "dim white",
+        }
+    },
+    "Apple Music": {
+        "primary": "#FA243C",
+        "secondary": "#1C1C1E",
+        "text": "white",
+        "pointer": "● ",
+        "style_overrides": {
+            "questionmark": "#FA243C bold",
+            "answer": "#FA243C bold",
+            "input": "white",
+            "pointer": "#FA243C bold",
+            "marker": "#FA243C",
+            "instruction": "dim white",
+        }
+    },
+    "Winamp (Retro)": {
+        "primary": "#FF9900",
+        "secondary": "#000000",
+        "text": "#00FF00",
+        "pointer": ">>",
+        "style_overrides": {
+            "questionmark": "#FF9900 bold",
+            "answer": "#00FF00 bold",
+            "input": "#00FF00",
+            "pointer": "#FF9900 bold",
+            "marker": "#FF9900",
+            "instruction": "dim #00FF00",
+        }
+    },
+    "Matrix": {
+        "primary": "#00FF41",
+        "secondary": "#000000",
+        "text": "#008F11",
+        "pointer": "=>",
+        "style_overrides": {
+            "questionmark": "#00FF41 bold",
+            "answer": "#00FF41 bold",
+            "input": "#00FF41",
+            "pointer": "#00FF41 bold",
+            "marker": "#00FF41",
+            "instruction": "dim #008F11",
+        }
+    }
+}
+
+def get_current_theme():
+    return THEMES.get(app_settings.get("theme", "Spotify"), THEMES["Spotify"])
+
+def get_current_style():
+    return get_style(get_current_theme()["style_overrides"], style_override=False)
 
 def get_ascii_thumbnail(url, width=36):
     if not url:
@@ -166,7 +237,7 @@ def get_visualizer(width=80, is_playing=True):
     res = ""
     for _ in range(width):
         res += random.choice(blocks) if is_playing else ' '
-    return Text(res, style="green")
+    return Text(res, style=get_current_theme()['primary'])
 
 def add_to_playlist_dialog(song):
     console.clear()
@@ -181,7 +252,7 @@ def add_to_playlist_dialog(song):
     sel = inquirer.select(
         message=f"'{song['title']}' hangi listeye eklensin?",
         choices=choices,
-        style=custom_style
+        style=get_current_style()
     ).execute()
     
     if sel == "CANCEL":
@@ -191,7 +262,7 @@ def add_to_playlist_dialog(song):
     if sel == "NEW":
         pl_name = inquirer.text(
             message="Yeni Çalma Listesinin Adı:",
-            style=custom_style
+            style=get_current_style()
         ).execute().strip()
         if not pl_name:
             console.print("[red]Geçersiz isim, iptal edildi.[/red]")
@@ -273,7 +344,7 @@ def play_session(initial_song, playlist_context):
             )
             
             # Header
-            layout["header"].update(Text("< Back\nModernized CLI Player", style="bold green"))
+            layout["header"].update(Text("< Back\nModernized CLI Player", style=f"bold {get_current_theme()['primary']}"))
             
             # Main Top (Art + Title)
             layout["main_top"].split_row(
@@ -317,7 +388,7 @@ def play_session(initial_song, playlist_context):
             if len(queue) > end_i:
                 queue_text.append(f"  ... (+{len(queue) - end_i} tane daha) ...", style="dim")
                 
-            right_panel = Panel(queue_text, title="Listede Sırada", border_style="#2ecc71")
+            right_panel = Panel(queue_text, title="Listede Sırada", border_style=get_current_theme()['primary'])
             layout["right_col"].update(right_panel)
             
             # Progress
@@ -333,9 +404,9 @@ def play_session(initial_song, playlist_context):
             empty = bar_len - filled
             
             if filled > 0:
-                bar = f"[#2ecc71]{'━'*(filled-1)}O[/][dim]{'━'*empty}[/]  [dim]{format_time(current_time)} / {format_time(total_time)}[/]"
+                bar = f"[{get_current_theme()['primary']}]{'━'*(filled-1)}O[/][dim]{'━'*empty}[/]  [dim]{format_time(current_time)} / {format_time(total_time)}[/]"
             else:
-                bar = f"[#2ecc71]O[/][dim]{'━'*empty}[/]  [dim]{format_time(current_time)} / {format_time(total_time)}[/]"
+                bar = f"[{get_current_theme()['primary']}]O[/][dim]{'━'*empty}[/]  [dim]{format_time(current_time)} / {format_time(total_time)}[/]"
                 
             layout["progress"].update(Text.from_markup(bar))
             
@@ -390,7 +461,7 @@ def play_session(initial_song, playlist_context):
                     
                     pulse = "🎤" if (current_time // 300) % 2 == 0 else "🎵"
                     if colored_part:
-                        nu_text.append(Text.from_markup(f" {pulse} [bold #00E676]{colored_part}[/][bold white]{dim_part}[/]\n"))
+                        nu_text.append(Text.from_markup(f" {pulse} [bold {get_current_theme()['primary']}]{colored_part}[/][bold white]{dim_part}[/]\n"))
                     else:
                         nu_text.append(Text.from_markup(f" {pulse} [bold white]{dim_part}[/]\n"))
                         
@@ -413,7 +484,7 @@ def play_session(initial_song, playlist_context):
             
             return Panel(
                 layout,
-                border_style="#2d3436",
+                border_style=get_current_theme()['secondary'],
                 box=box.ROUNDED,
                 padding=(1, 2)
             )
@@ -583,7 +654,7 @@ setup_global_hotkeys()
 
 def search_menu():
     console.clear()
-    console.print(Panel("[bold #2ecc71]Modernized CLI Player[/] - Arama", border_style="#2d3436"))
+    console.print(Panel(f"[bold {get_current_theme()['primary']}]Modernized CLI Player[/] - Arama", border_style=get_current_theme()['secondary']))
     
     hist = load_history()
     hist_dict = {h: None for h in hist}
@@ -591,7 +662,7 @@ def search_menu():
     query = inquirer.text(
         message="Şarkı veya sanatçı arayın (Çıkmak için boş bırakın):",
         completer=hist_dict,
-        style=custom_style
+        style=get_current_style()
     ).execute()
     
     if not query.strip():
@@ -614,8 +685,8 @@ def search_menu():
     sel = inquirer.select(
         message="Seçtiğiniz şarkıyı dinleyin:",
         choices=choices,
-        style=custom_style,
-        pointer="> "
+        style=get_current_style(),
+        pointer=get_current_theme()["pointer"]
     ).execute()
     
     if sel != "BACK":
@@ -623,30 +694,88 @@ def search_menu():
         
     return True
 
+def export_playlist_cloud(pl_name, songs):
+    console.clear()
+    with console.status(f"[bold yellow]'{pl_name}' listesi buluta yükleniyor...[/bold yellow]"):
+        try:
+            payload = json.dumps({pl_name: songs}, ensure_ascii=False)
+            r = requests.post("https://dpaste.com/api/v2/", data={"content": payload, "syntax": "json", "expiry_days": 365})
+            url = r.text.strip()
+            code = url.split("/")[-1]
+            
+            console.print(Panel(f"Liste başarıyla paylaşıldı!\n\nArkadaşlarınıza şu paylaşım kodunu gönderin: [bold {get_current_theme()['primary']}]{code}[/]\n\nBu kod 1 yıl boyunca geçerlidir.", title="🚀 Bulut Paylaşımı", border_style=get_current_theme()['primary']))
+            time.sleep(6)
+        except Exception as e:
+            console.print(f"[red]Hata oluştu: {e}[/red]")
+            time.sleep(3)
+
+def import_playlist_cloud():
+    console.clear()
+    console.print(Panel("Arkadaşınızın size gönderdiği Kısa Kodu girerek listesini içeri aktarabilirsiniz.", title="📥 Buluttan İndir (İçe Aktar)", border_style=get_current_theme()['primary']))
+    
+    code = inquirer.text(
+        message="Paylaşım Kodunu Girin (örn: 7PRHHYV94) veya Q basıp çıkın:",
+        style=get_current_style()
+    ).execute().strip()
+    
+    if not code or code.upper() == "Q":
+        return
+        
+    with console.status(f"[bold yellow]Buluttan '{code}' aranıyor...[/bold yellow]"):
+        import_url = f"https://dpaste.com/{code}.txt"
+        try:
+            r = requests.get(import_url)
+            if r.status_code != 200:
+                console.print("\n[red]❌ Geçersiz kod veya süresi dolmuş liste![/red]")
+                time.sleep(3)
+                return
+                
+            data = json.loads(r.text)
+            
+            for new_pl_name, songs in data.items():
+                final_name = new_pl_name
+                if final_name in playlist_manager.get_all():
+                    final_name = final_name + " (Bulut)"
+                    
+                for s in songs:
+                    playlist_manager.add_song(final_name, s)
+                    
+            console.print(f"\n[bold green]✓ Liste başarıyla '{list(data.keys())[0]}' adıyla indirildi ve eklendi![/bold green]")
+            time.sleep(3)
+        except Exception as e:
+            console.print(f"\n[red]❌ Hata oluştu (Bağlantı veya Kod hatalı): {e}[/red]")
+            time.sleep(3)
+
 def playlists_menu():
     while True:
         console.clear()
         pm = playlist_manager
         playlists = pm.get_all()
         
+        choices = [
+            Choice("BACK", "<- Ana Menüye Dön"),
+            Choice("IMPORT_CLOUD", "📥 Buluttan Liste İndir (Kısa Kod İle)")
+        ]
+        
         if not playlists:
-            console.print("[yellow]Henüz hiç çalma listeniz yok. Müzik çalarken klavyede [P] tuşuna basarak listeye şarkı ekleyebilirsiniz.[/yellow]")
-            time.sleep(4)
-            return
-            
-        choices = [Choice("BACK", "<- Ana Menüye Dön")]
-        for pl_name, songs in playlists.items():
-            choices.append(Choice(pl_name, f"📁 {pl_name} ({len(songs)} Şarkı)"))
+            console.print("[yellow]Henüz hiç çalma listeniz yok.[/yellow]")
+            console.print("[dim]Arkadaşınızın listesini indirmek için yukarıdan seçebilirsiniz.[/dim]\n")
+        else:
+            for pl_name, songs in playlists.items():
+                choices.append(Choice(pl_name, f"📁 {pl_name} ({len(songs)} Şarkı)"))
             
         pl_name = inquirer.select(
             message="Görüntülemek istediğiniz listeyi seçin:",
             choices=choices,
-            style=custom_style,
-            pointer="> "
+            style=get_current_style(),
+            pointer=get_current_theme()["pointer"]
         ).execute()
         
         if pl_name == "BACK":
             return
+        elif pl_name == "IMPORT_CLOUD":
+            import_playlist_cloud()
+            continue
             
         playlist_actions(pl_name, playlists[pl_name])
 
@@ -659,14 +788,17 @@ def playlist_actions(pl_name, songs):
     choices = [
         Choice("PLAY", "▶ Listeyi Çal (Sırayla)"),
         Choice("RECOMMEND", "💡 Bu Listeye Göre Akıllı Öneriler Bul (Radyo Karışımı)"),
+        Choice("SHARE_CLOUD", "🚀 Bu Listeyi Paylaş (Buluta Yükle)"),
+        Choice("REMOVE_SONG", "➖ Bu Listeden Belirli Şarkıyı Çıkar"),
+        Choice("DELETE_LIST", "🗑️ Bu Listeyi Tamamen Sil"),
         Choice("BACK", "<- Playlistlere Dön")
     ]
     
     act = inquirer.select(
         message=f"{pl_name} listesi için işlem seçin:",
         choices=choices,
-        style=custom_style,
-        pointer="> "
+        style=get_current_style(),
+        pointer=get_current_theme()["pointer"]
     ).execute()
     
     if act == "PLAY":
@@ -688,38 +820,110 @@ def playlist_actions(pl_name, songs):
         sel = inquirer.select(
             message="Akıllı Öneriler: Hangi şarkıdan başlamak istersiniz?",
             choices=rec_choices,
-            style=custom_style,
-            pointer="> "
+            style=get_current_style(),
+            pointer=get_current_theme()["pointer"]
         ).execute()
         
         if sel != "BACK":
              play_session(sel, recs)
+    elif act == "SHARE_CLOUD":
+        export_playlist_cloud(pl_name, songs)
+    elif act == "REMOVE_SONG":
+        song_choices = [Choice("BACK", "<- İptal")]
+        for s in songs:
+            song_choices.append(Choice(s, f"➖ {s['title']} - {s['artist']}"))
+            
+        song_to_remove = inquirer.select(
+            message="Silmek istediğiniz şarkıyı seçin:",
+            choices=song_choices,
+            style=get_current_style(),
+            pointer=get_current_theme()["pointer"]
+        ).execute()
+        
+        if song_to_remove != "BACK":
+            playlist_manager.toggle_song(pl_name, song_to_remove)
+            console.print(f"\n[bold red]✓ '{song_to_remove['title']}' listeden çıkarıldı![/bold red]")
+            time.sleep(1.5)
+    elif act == "DELETE_LIST":
+        confirm_choices = [Choice(False, "❌ Hayır, İptal"), Choice(True, "✅ Evet, Komple Sil")]
+        confirm = inquirer.select(
+            message=f"'{pl_name}' listesini Tümüyle silmek istediğinize emin misiniz?",
+            choices=confirm_choices,
+            style=get_current_style(),
+            pointer=get_current_theme()["pointer"]
+        ).execute()
+        if confirm:
+            playlist_manager.delete_playlist(pl_name)
+            console.print(f"\n[bold red]🗑️ '{pl_name}' listesi tamamen silindi.[/bold red]")
+            time.sleep(1.5)
+
+def help_menu():
+    console.clear()
+    help_text = """[bold #2ecc71]1. Menüler Arası Gezinme[/]
+- Menülerde gezinmek için klavyenizdeki [bold yellow]AŞAĞI ve YUKARI Yön Tuşlarını[/] kullanın ve seçiminizi yapmak için [bold yellow]ENTER[/]'a basın.
+- Girdiğiniz yerden çıkmak veya ana menüye dönmek için seçeneklerdeki [bold red]"<- Geri Dön"[/] seçeneğini seçin.
+
+[bold #2ecc71]2. Çalma Listesi Paylaşma ve İndirme (Bulut)[/]
+- [bold white]Kendi Listenizi Paylaşmak:[/] Ana Menü > Çalma Listelerim > Paylaşmak istediğiniz listeye (Örn: Efkar) tıklayın > [bold cyan]"🚀 Bu Listeyi Paylaş (Buluta Yükle)"[/] seçeneğini seçin. Uygulama size [bold yellow]Örn: 7PRHHYV94[/] gibi bir Paylaşım Kodu verecektir. Bu kodu kopyalayıp arkadaşlarınıza atın.
+- [bold white]Başkasının Listesini İndirmek:[/] Ana Menü > Çalma Listelerim menüsündeki en üst seçenekte yer alan [bold cyan]"📥 Buluttan Liste İndir (Kısa Kod İle)"[/] seçeneğine basın. Arkadaşınızın gönderdiği kodu yazıp Enter'a basın. Liste otomatik olarak müziklerinize eklenecektir!
+
+[bold #2ecc71]3. Pratik Oynatıcı Kısayolları (Müzik Çalarken)[/]
+- [bold yellow]P :[/] Çalan şarkıyı anında istediğiniz bir listeye kaydetmenizi veya yeni bir liste başlığı ("Pop", "Rock" vs.) açmanızı sağlar.
+- [bold yellow]L veya F :[/] Şarkıyı Hızlıca Favoriler listenize atar veya favorilerden geri çıkarır.
+- [bold yellow]Boşluk (Space):[/] Şarkıyı Durdurur veya Devam Ettirir.
+
+Anladım diyerek [bold cyan]menüye dönmek için ENTER[/] tuşuna basın...
+"""
+    console.print(Panel(help_text, title="📖 Yardım ve Kullanım Rehberi", border_style=get_current_theme()['primary']))
+    input()
 
 def main_menu():
     console.clear()
-    console.print(Panel("[bold #2ecc71]Modernized CLI Player[/] - Ana Menü", border_style="#2d3436"))
+    console.print(Panel(f"[bold {get_current_theme()['primary']}]Modernized CLI Player[/] - Ana Menü", border_style=get_current_theme()['secondary']))
     
     choices = [
         Choice("SEARCH", "🎵 Şarkı veya Sanatçı Ara"),
         Choice("PLAYLISTS", "📂 Çalma Listelerim (Playlists)"),
+        Choice("THEME", f"🎨 Tema Seçimi (Mevcut: {app_settings.get('theme', 'Spotify')})"),
+        Choice("TOGGLE_NORM", f"🎧 Spotify Ses Eşitleme: {'AÇIK' if app_settings.get('normalization', True) else 'KAPALI'}"),
         Choice("TOGGLE_NOTIFS", f"🔔 Bildirimler: {'AÇIK' if app_settings.get('notifications_enabled', True) else 'KAPALI'}"),
+        Choice("HELP", "📖 Yardım & Kullanım Rehberi"),
         Choice("QUIT", "❌ Çıkış")
     ]
     
     sel = inquirer.select(
         message="Ne yapmak istersiniz?",
         choices=choices,
-        style=custom_style,
-        pointer="> "
+        style=get_current_style(),
+        pointer=get_current_theme()["pointer"]
     ).execute()
     
     if sel == "SEARCH":
         search_menu()
     elif sel == "PLAYLISTS":
         playlists_menu()
+    elif sel == "THEME":
+        theme_choices = [Choice(k, f"🎨 {k}") for k in THEMES.keys()]
+        theme_choices.append(Choice("BACK", "<- Geri Dön"))
+        t_sel = inquirer.select(
+            message="Tema Seçiniz:",
+            choices=theme_choices,
+            style=get_current_style(),
+            pointer=get_current_theme()["pointer"]
+        ).execute()
+        if t_sel != "BACK":
+            app_settings["theme"] = t_sel
+            save_settings()
+    elif sel == "TOGGLE_NORM":
+        new_val = not app_settings.get("normalization", True)
+        app_settings["normalization"] = new_val
+        save_settings()
+        player.set_normalization(new_val)
     elif sel == "TOGGLE_NOTIFS":
         app_settings["notifications_enabled"] = not app_settings.get("notifications_enabled", True)
         save_settings()
+    elif sel == "HELP":
+        help_menu()
     elif sel == "QUIT":
         return False
     return True

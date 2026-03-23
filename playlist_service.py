@@ -49,3 +49,10 @@ class PlaylistManager:
         self.playlists[playlist_name].append(song)
         self.save()
         return True # added
+
+    def delete_playlist(self, playlist_name):
+        if playlist_name in self.playlists:
+            del self.playlists[playlist_name]
+            self.save()
+            return True
+        return False

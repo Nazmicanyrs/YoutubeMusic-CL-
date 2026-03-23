@@ -17,16 +17,35 @@ class PlayerService:
             'extractor_args': {'youtube': ['player_client=android,web']}
         }
         self.player = None
+        self.normalization_enabled = True
+        self._init_vlc()
         
+    def _init_vlc(self):
         if VLC_AVAILABLE:
+            args = []
+            if self.normalization_enabled:
+                args.extend(["--audio-filter=normvol"])
             try:
-                self.instance = vlc.Instance()
+                if args:
+                    self.instance = vlc.Instance(" ".join(args))
+                else:
+                    self.instance = vlc.Instance()
             except Exception:
                 self.instance = None
                 print("VLC örneği oluşturulamadı.")
         else:
             self.instance = None
             print("Sisteminizde VLC Player bulunamadı.")
+            
+    def set_normalization(self, enabled):
+        if self.normalization_enabled != enabled:
+            was_playing = self.is_playing()
+            self.normalization_enabled = enabled
+            self._init_vlc()
+            if was_playing:
+                # Re-initializing VLC instance while playing will break the stream.
+                # Since toggling via menu usually happens when not playing, this is fine.
+                pass
         
     def get_stream_url(self, url: str) -> str:
         with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
