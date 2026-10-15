@@ -12,6 +12,9 @@ __pycache__/
 playlists.json
 history.json
 settings.json
+*.corrupt-*.json
+.*.json.*.tmp
+ytm-cl.log*
 
 # IDE ve Editör ayarları
 .vscode/
