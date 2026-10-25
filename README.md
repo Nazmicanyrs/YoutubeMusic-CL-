@@ -1,4 +1,4 @@
-# YouTube Music CLI Player 🎵
+# yt-music-cli 🎵
 
 Python kullanılarak tamamen sıfırdan geliştirilmiş, YouTube Music'ten doğrudan terminalinizde (komut satırından) şarkı arayıp çalabileceğiniz zengin arayüzlü ve tam kontrollü bir medya oynatıcıdır.
 
@@ -8,12 +8,14 @@ Python kullanılarak tamamen sıfırdan geliştirilmiş, YouTube Music'ten doğr
 
 ## Özellikler
 
-- 🎨 **Zengin Arayüz:** Modern kutulu (`rich`) ve çok renkli kullanım, hazır temalar veya **Kişisel Tema Editörü** ile kendi HEX renklerinizi tanımlama.
+- 🎨 **Gelişmiş TUI Dashboard & Zengin Arayüz:** Modern kutulu (`rich`) gösterge paneli, sistem rozetleri, anlık istatistikler ve görsel tema galerisi (Spotify, YouTube Music, Apple Music, Cyberpunk, Dracula, Nord Frost, Tokyo Night, Catppuccin, Winamp Retro, Matrix ve **Kişisel Tema Editörü**).
+- 🔍 **Zengin Tablolu Arama & Müzik Keşfi:** Arama geçmişi etiketleri, detaylı şarkı listesi tablosu, tek tıkla tümünü çalma, karıştırma ve akıllı radyo entegrasyonu.
 - 🖼️ **Gerçek Piksel Kapak Resmi:** Sixel destekli terminalde kapak, karakter bloklarına indirgenmeden görüntülenir. Kaynak kapak 1024×1024 olarak istenir ve ekrandaki alana göre ölçeklenir. Ekran güncellemeleri resmi tekrar tekrar silmez. Sixel olmayan terminallerde renkli blok görünümüne, `C` ile Retro Braille moduna geçilir.
+- 🌊 **Dinamik Ses Spektrumu (Visualizer):** Çalan parçanın ritmine duyarlı çok frekanslı harmonik ekolayzer dalgaları ve tepe seviye göstergeleri.
 - 📺 **Mini Player Modu:** Terminal penceresi küçüldüğünde veya `M` tuşuna basıldığında az yer kaplayan 3 satırlık kompakt kontrol şeridi.
 - 🎵 **Veri Akışı (Streaming):** Şarkıyı indirmeden canlı akış üzerinden oynatır.
-- 🎤 **Senkronize Şarkı Sözleri:** Karaoke tarzı, zamanlamalı söz gösterimi.
-- 📂 **Çalma Listeleri:** Favoriler, özel listeler, karışık çalma, akıllı öneriler ve bulut paylaşımı.
+- 🎤 **Senkronize Şarkı Sözleri (Karaoke):** Zamanlamalı, parlayan aktif satır gösterimli karaoke söz modu.
+- 📂 **Çalma Listeleri & Önizleme:** Şarkı sayısı, parça listesi önizleme tablosu, favoriler, özel listeler, karışık çalma, akıllı öneriler ve bulut paylaşımı.
 
 ### ⌨️ Oynatıcı Kısayolları
 

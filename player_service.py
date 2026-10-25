@@ -18,6 +18,22 @@ class StreamError(Exception):
     pass
 
 
+class YDLLogger:
+    def debug(self, msg):
+        pass
+
+    def info(self, msg):
+        pass
+
+    def warning(self, msg):
+        if "No supported JavaScript runtime could be found" in msg or "challenge solver" in msg or "Signature solving failed" in msg:
+            return
+        logger.warning(msg)
+
+    def error(self, msg):
+        logger.error(msg)
+
+
 class PlayerService:
     """Tek bir VLC media player'ı yeniden kullanır; böylece ses seviyesi vb. şarkılar arasında korunur."""
 
@@ -28,7 +44,8 @@ class PlayerService:
             "no_warnings": True,
             "noplaylist": True,
             "socket_timeout": 15,
-            "logger": logger,  # ağ hataları tam ekran piksel görüntüsünün üstüne yazılmasın
+            "logger": YDLLogger(),  # ağ hataları tam ekran piksel görüntüsünün üstüne yazılmasın
+            "js_runtimes": {"node": {}, "deno": {}},
         }
         self.normalization_enabled = normalization
         self.volume = self._clamp(volume)
