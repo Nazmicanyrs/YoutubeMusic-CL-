@@ -1,10 +1,27 @@
 """VLC tabanlı ses oynatıcı; akış URL'leri yt-dlp ile çözülür."""
 import logging
+import os
+import sys
 import threading
 
 import yt_dlp
 
 logger = logging.getLogger(__name__)
+
+# macOS için VLC kütüphane ve plugin yolunu otomatik algıla
+if sys.platform == "darwin":
+    possible_vlc_libs = [
+        "/Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib",
+        os.path.expanduser("~/Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib"),
+    ]
+    for lib_path in possible_vlc_libs:
+        if os.path.exists(lib_path):
+            if "PYTHON_VLC_LIB_PATH" not in os.environ:
+                os.environ["PYTHON_VLC_LIB_PATH"] = lib_path
+            plugin_dir = os.path.join(os.path.dirname(os.path.dirname(lib_path)), "plugins")
+            if "VLC_PLUGIN_PATH" not in os.environ and os.path.exists(plugin_dir):
+                os.environ["VLC_PLUGIN_PATH"] = plugin_dir
+            break
 
 try:
     import vlc
@@ -86,7 +103,12 @@ class PlayerService:
     def _init_vlc(self):
         self._release()
         if not VLC_AVAILABLE:
-            self.last_error = "Sisteminizde VLC Media Player (64-bit) bulunamadı. Lütfen videolan.org'dan kurun."
+            if sys.platform == "darwin":
+                self.last_error = "VLC Media Player bulunamadı. Lütfen 'brew install --cask vlc' komutunu çalıştırın veya videolan.org'dan VLC kurun."
+            elif sys.platform.startswith("linux"):
+                self.last_error = "VLC Media Player bulunamadı. Lütfen 'sudo apt install vlc libvlc-dev' (Ubuntu/Debian) veya 'sudo pacman -S vlc' ile kurun."
+            else:
+                self.last_error = "Sisteminizde VLC Media Player (64-bit) bulunamadı. Lütfen videolan.org'dan kurun."
             return
         args = ["--no-video", "--quiet"]
         if self.normalization_enabled:

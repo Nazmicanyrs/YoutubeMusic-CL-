@@ -103,7 +103,6 @@ class GraphicsTests(unittest.TestCase):
         self.assertEqual(stream.getvalue().count("\x1bP0;1;0q"), 3)
 
 
-@unittest.skipUnless(sys.platform == "win32", "Windows application")
 class CoverIntegrationTests(unittest.TestCase):
     def test_old_playlist_thumbnail_is_upgraded_and_falls_back(self):
         import main

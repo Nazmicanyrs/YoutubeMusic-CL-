@@ -16,7 +16,7 @@ wcwidth==0.6.0
 # YouTube sık değiştiği için yt-dlp sabitlenmez; sorun yaşarsanız: pip install -U yt-dlp
 yt-dlp>=2026.3.17
 ytmusicapi==1.11.5
-win11toast>=0.36.0
+win11toast>=0.36.0; sys_platform == 'win32'
 keyboard==0.13.5
 syncedlyrics==1.0.0
 PyQt6>=6.5.0

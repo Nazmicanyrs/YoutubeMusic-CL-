@@ -2,10 +2,6 @@
 import os
 import sys
 
-if os.name != "nt":
-    print("Bu uygulama şu an yalnızca Windows'ta çalışır (msvcrt / win11toast bağımlılıkları).")
-    sys.exit(1)
-
 # Konsolun UTF-8 çıktıyı (özellikle ▀ yarım blok karakterleri ve Türkçe harfler) sorunsuz basmasını sağla
 try:
     if hasattr(sys.stdout, "reconfigure"):
@@ -19,7 +15,6 @@ import io
 import json
 import logging
 import math
-import msvcrt
 import random
 import re
 import shutil
@@ -31,12 +26,20 @@ from bisect import bisect_right
 from collections import deque
 from logging.handlers import RotatingFileHandler
 
+if os.name == "nt":
+    import msvcrt
+else:
+    msvcrt = None
+
 import requests
 from PIL import Image, ImageEnhance
 
-try:
-    from win11toast import toast
-except ImportError:
+if sys.platform == "win32":
+    try:
+        from win11toast import toast
+    except ImportError:
+        toast = None
+else:
     toast = None
 
 try:
@@ -569,7 +572,7 @@ def search_synced_lyrics(term):
 
 # --------------------------------------------------------------------------- bildirim
 def show_notification(song):
-    if not app_settings.get("notifications_enabled", True) or toast is None:
+    if not app_settings.get("notifications_enabled", True):
         return
     try:
         icon = None
@@ -582,7 +585,26 @@ def show_notification(song):
                 with open(icon_path, "wb") as f:
                     f.write(r.content)
             icon = icon_path
-        toast("🎵 Şimdi Çalıyor", f"{song['title']}\n{song['artist']}", icon=icon, app_id="yt-music-cli")
+
+        title = "🎵 Şimdi Çalıyor"
+        msg = f"{song['title']}\n{song['artist']}"
+
+        if sys.platform == "win32" and toast is not None:
+            toast(title, msg, icon=icon, app_id="yt-music-cli")
+        elif sys.platform == "darwin":
+            safe_title = title.replace('"', '\\"')
+            safe_msg = msg.replace('"', '\\"')
+            subprocess.run(
+                ["osascript", "-e", f'display notification "{safe_msg}" with title "{safe_title}"'],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        elif sys.platform.startswith("linux"):
+            cmd = ["notify-send", title, msg]
+            if icon and os.path.exists(icon):
+                cmd.extend(["-i", icon])
+            subprocess.run(cmd, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         logger.debug("Bildirim gösterilemedi", exc_info=True)
 
@@ -643,6 +665,40 @@ KEYMAP = {
     b"c": "toggle_cover", b"C": "toggle_cover",
 }
 ARROW_KEYMAP = {b"H": "scroll_up", b"P": "scroll_down", b"K": "seek_back", b"M": "seek_fwd"}
+
+
+class PosixTerminalMode:
+    """POSIX sistemlerde (macOS / Linux) klavye girişi için terminali cbreak/no-echo moduna alır."""
+
+    def __init__(self):
+        self.fd = None
+        self.old_settings = None
+
+    def __enter__(self):
+        if os.name != "nt":
+            try:
+                if sys.stdin.isatty():
+                    import termios
+                    self.fd = sys.stdin.fileno()
+                    self.old_settings = termios.tcgetattr(self.fd)
+                    new_settings = termios.tcgetattr(self.fd)
+                    new_settings[3] = new_settings[3] & ~termios.ECHO & ~termios.ICANON
+                    termios.tcsetattr(self.fd, termios.TCSANOW, new_settings)
+            except Exception:
+                self.old_settings = None
+        return self
+
+    def __exit__(self, *args):
+        self.restore()
+
+    def restore(self):
+        if self.fd is not None and self.old_settings is not None:
+            try:
+                import termios
+                termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old_settings)
+            except Exception:
+                pass
+            self.old_settings = None
 
 
 class PlayerSession:
@@ -876,12 +932,52 @@ class PlayerSession:
 
     @staticmethod
     def read_key():
-        if not PENDING_KEYS and not msvcrt.kbhit():
-            return None
-        ch = PENDING_KEYS.popleft() if PENDING_KEYS else msvcrt.getch()
-        if ch in (b"\x00", b"\xe0"):  # yön/fonksiyon tuşları iki bayt gönderir
-            return ARROW_KEYMAP.get(PENDING_KEYS.popleft() if PENDING_KEYS else msvcrt.getch())
-        return KEYMAP.get(ch)
+        if PENDING_KEYS:
+            ch = PENDING_KEYS.popleft()
+            return KEYMAP.get(ch)
+
+        if os.name == "nt":
+            if msvcrt is None or not msvcrt.kbhit():
+                return None
+            ch = msvcrt.getch()
+            if ch in (b"\x00", b"\xe0"):  # yön/fonksiyon tuşları iki bayt gönderir
+                return ARROW_KEYMAP.get(PENDING_KEYS.popleft() if PENDING_KEYS else msvcrt.getch())
+            return KEYMAP.get(ch)
+        else:
+            # POSIX (macOS, Linux)
+            import select
+            try:
+                if not sys.stdin.isatty():
+                    return None
+                fd = sys.stdin.fileno()
+                r, _, _ = select.select([fd], [], [], 0)
+                if not r:
+                    return None
+                ch = os.read(fd, 1)
+                if not ch:
+                    return None
+                if ch == b"\x1b":
+                    # Escape veya ANSI sequence kontrolü
+                    r2, _, _ = select.select([fd], [], [], 0.05)
+                    if r2:
+                        seq = os.read(fd, 2)
+                        # Yukarı ok: \x1b[A veya \x1bOA
+                        # Aşağı ok:  \x1b[B veya \x1bOB
+                        # Sağ ok:    \x1b[C veya \x1bOC
+                        # Sol ok:    \x1b[D veya \x1bOD
+                        if seq in (b"[A", b"OA"):
+                            return "scroll_up"
+                        elif seq in (b"[B", b"OB"):
+                            return "scroll_down"
+                        elif seq in (b"[C", b"OC"):
+                            return "seek_fwd"
+                        elif seq in (b"[D", b"OD"):
+                            return "seek_back"
+                        return None
+                    return "quit"
+                return KEYMAP.get(ch)
+            except Exception:
+                return None
 
     def check_auto_advance(self):
         with self.lock:
@@ -916,12 +1012,13 @@ class PlayerSession:
         ACTION_QUEUE.clear()
         HOTKEYS_ACTIVE.set()
         self.start_track()
+        term_mode = PosixTerminalMode()
         try:
             display = (SixelLive(self.render(), console, lambda: self._pixel_cover)
                        if self.graphics.sixel else
                        Live(self.render(), console=console, refresh_per_second=10, screen=True))
             last_size = console.size
-            with display as live:
+            with term_mode, display as live:
                 while True:
                     result = None
                     while ACTION_QUEUE and result is None:
@@ -938,11 +1035,13 @@ class PlayerSession:
                     if result == "playlist":
                         HOTKEYS_ACTIVE.clear()
                         live.stop()
+                        term_mode.restore()
                         try:
                             add_to_playlist_dialog(self.song)
                         finally:
                             ACTION_QUEUE.clear()
                             HOTKEYS_ACTIVE.set()
+                            term_mode.__enter__()
                             live.start(refresh=True)
 
                     player.tick()
@@ -955,6 +1054,7 @@ class PlayerSession:
                     live.update(self.render())
                     time.sleep(0.05)  # CPU'yu boşa yakmamak için
         finally:
+            term_mode.restore()
             HOTKEYS_ACTIVE.clear()
             ACTION_QUEUE.clear()
             with self.lock:

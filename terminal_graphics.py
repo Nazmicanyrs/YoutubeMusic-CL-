@@ -40,49 +40,88 @@ def parse_replies(reply):
 
 def detect_graphics(console, timeout=0.6):
     """Ask the actual terminal, not its name/version. Preserve typed keys."""
-    if os.name != "nt" or not console.is_terminal:
+    if not console.is_terminal:
         return GraphicsSupport()
-    import ctypes
-    import msvcrt
-    from ctypes import wintypes
 
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
-    kernel.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-    old_input = wintypes.DWORD()
-    old_output = wintypes.DWORD()
     reply = ""
-    changed = False
-    try:
+    if os.name == "nt":
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        old_input = wintypes.DWORD()
+        old_output = wintypes.DWORD()
+        changed = False
+        try:
+            import sys
+            input_handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+            output_handle = msvcrt.get_osfhandle(console.file.fileno())
+            if not kernel.GetConsoleMode(input_handle, ctypes.byref(old_input)):
+                return GraphicsSupport()
+            if not kernel.GetConsoleMode(output_handle, ctypes.byref(old_output)):
+                return GraphicsSupport()
+            # Raw VT input is needed for the response; no echo / line buffering.
+            if not kernel.SetConsoleMode(input_handle, (old_input.value | 0x200) & ~6):
+                return GraphicsSupport()
+            changed = True
+            kernel.SetConsoleMode(output_handle, old_output.value | 4)
+            console.file.write("\x1b[c\x1b[16t")
+            console.file.flush()
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                if msvcrt.kbhit():
+                    reply += msvcrt.getch().decode("latin1")
+                    if re.search(r"\x1b\[\?[\d;]*c", reply) and re.search(r"\x1b\[6;\d+;\d+t", reply):
+                        break
+                else:
+                    time.sleep(0.005)
+            return parse_replies(reply)
+        except (OSError, ValueError, AttributeError):
+            return GraphicsSupport()
+        finally:
+            if changed:
+                kernel.SetConsoleMode(input_handle, old_input.value)
+            PENDING_KEYS.extend(bytes([b]) for b in _REPLIES.sub("", reply).encode("latin1"))
+    else:
+        # POSIX (macOS, Linux)
+        import select
         import sys
-        input_handle = msvcrt.get_osfhandle(sys.stdin.fileno())
-        output_handle = msvcrt.get_osfhandle(console.file.fileno())
-        if not kernel.GetConsoleMode(input_handle, ctypes.byref(old_input)):
+        import termios
+        import tty
+
+        fd = None
+        old_attr = None
+        try:
+            if not sys.stdin.isatty():
+                return GraphicsSupport()
+            fd = sys.stdin.fileno()
+            old_attr = termios.tcgetattr(fd)
+            tty.setcbreak(fd)
+            console.file.write("\x1b[c\x1b[16t")
+            console.file.flush()
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                r, _, _ = select.select([fd], [], [], 0.02)
+                if r:
+                    chunk = os.read(fd, 32).decode("latin1", errors="ignore")
+                    reply += chunk
+                    if re.search(r"\x1b\[\?[\d;]*c", reply) and re.search(r"\x1b\[6;\d+;\d+t", reply):
+                        break
+                else:
+                    time.sleep(0.005)
+            return parse_replies(reply)
+        except Exception:
             return GraphicsSupport()
-        if not kernel.GetConsoleMode(output_handle, ctypes.byref(old_output)):
-            return GraphicsSupport()
-        # Raw VT input is needed for the response; no echo / line buffering.
-        if not kernel.SetConsoleMode(input_handle, (old_input.value | 0x200) & ~6):
-            return GraphicsSupport()
-        changed = True
-        kernel.SetConsoleMode(output_handle, old_output.value | 4)
-        console.file.write("\x1b[c\x1b[16t")
-        console.file.flush()
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if msvcrt.kbhit():
-                reply += msvcrt.getch().decode("latin1")
-                if re.search(r"\x1b\[\?[\d;]*c", reply) and re.search(r"\x1b\[6;\d+;\d+t", reply):
-                    break
-            else:
-                time.sleep(0.005)
-        return parse_replies(reply)
-    except (OSError, ValueError, AttributeError):
-        return GraphicsSupport()
-    finally:
-        if changed:
-            kernel.SetConsoleMode(input_handle, old_input.value)
-        PENDING_KEYS.extend(bytes([b]) for b in _REPLIES.sub("", reply).encode("latin1"))
+        finally:
+            if fd is not None and old_attr is not None:
+                try:
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_attr)
+                except Exception:
+                    pass
+            PENDING_KEYS.extend(bytes([b]) for b in _REPLIES.sub("", reply).encode("latin1"))
 
 
 def fit_cover(columns, rows, support, max_pixels=1024):

@@ -14,6 +14,7 @@ import math
 import os
 import platform
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -121,9 +122,12 @@ try:
 except ImportError:
     syncedlyrics = None
 
-try:
-    from win11toast import toast
-except ImportError:
+if sys.platform == "win32":
+    try:
+        from win11toast import toast
+    except ImportError:
+        toast = None
+else:
     toast = None
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -2465,9 +2469,26 @@ class YtMusicGuiApp(QMainWindow):
         self._refresh_queue_ui()
         self._load_lyrics_for_song(song)
 
-        if self.settings.get("notifications_enabled", True) and toast:
+        if self.settings.get("notifications_enabled", True):
             try:
-                toast("yt-music-gui", f"{title}\n{artist}", app_id="yt-music-gui")
+                msg = f"{title}\n{artist}"
+                if sys.platform == "win32" and toast:
+                    toast("yt-music-gui", msg, app_id="yt-music-gui")
+                elif sys.platform == "darwin":
+                    safe_msg = msg.replace('"', '\\"')
+                    subprocess.run(
+                        ["osascript", "-e", f'display notification "{safe_msg}" with title "yt-music-gui"'],
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                elif sys.platform.startswith("linux"):
+                    subprocess.run(
+                        ["notify-send", "yt-music-gui", msg],
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
             except Exception:
                 pass
 
