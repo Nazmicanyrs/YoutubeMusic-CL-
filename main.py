@@ -58,7 +58,6 @@ from InquirerPy.utils import get_style
 from prompt_toolkit.completion import WordCompleter
 
 from rich import box
-from rich.align import Align
 from rich.console import Console, Group
 from rich.layout import Layout
 from rich.live import Live
@@ -100,166 +99,7 @@ SHARE_CODE_RE = re.compile(r"^[A-Za-z0-9]{4,20}$")
 DPASTE_URL_RE = re.compile(r"^https://dpaste\.com/([A-Za-z0-9]+)/?$")
 
 # --------------------------------------------------------------------------- temalar
-THEMES = {
-    "yt-music-cli": {
-        "primary": "#00D2FF",
-        "accent": "#FFA500",
-        "border": "#1A3B54",
-        "pointer": "▶ ",
-        "style_overrides": {
-            "questionmark": "#00D2FF bold",
-            "answer": "#FFA500 bold",
-            "input": "white",
-            "pointer": "#00D2FF bold",
-            "marker": "#00D2FF",
-            "instruction": "dim #50768C",
-        },
-    },
-    "MelodyCLI": {
-        "primary": "#00D2FF",
-        "accent": "#FFA500",
-        "border": "#1A3B54",
-        "pointer": "▶ ",
-        "style_overrides": {
-            "questionmark": "#00D2FF bold",
-            "answer": "#FFA500 bold",
-            "input": "white",
-            "pointer": "#00D2FF bold",
-            "marker": "#00D2FF",
-            "instruction": "dim #50768C",
-        },
-    },
-    "Spotify": {
-        "primary": "#1DB954",
-        "border": "#535353",
-        "pointer": "> ",
-        "style_overrides": {
-            "questionmark": "#1DB954 bold",
-            "answer": "#1db954 bold",
-            "input": "white",
-            "pointer": "#1DB954 bold",
-            "marker": "#1DB954",
-            "instruction": "dim white",
-        },
-    },
-    "Youtube Music": {
-        "primary": "#FF0000",
-        "border": "#606060",
-        "pointer": "► ",
-        "style_overrides": {
-            "questionmark": "#FF0000 bold",
-            "answer": "#FF0000 bold",
-            "input": "white",
-            "pointer": "#FF0000 bold",
-            "marker": "#FF0000",
-            "instruction": "dim white",
-        },
-    },
-    "Apple Music": {
-        "primary": "#FA243C",
-        "border": "#8E8E93",
-        "pointer": "● ",
-        "style_overrides": {
-            "questionmark": "#FA243C bold",
-            "answer": "#FA243C bold",
-            "input": "white",
-            "pointer": "#FA243C bold",
-            "marker": "#FA243C",
-            "instruction": "dim white",
-        },
-    },
-    "Winamp (Retro)": {
-        "primary": "#FF9900",
-        "border": "#FF9900",
-        "pointer": ">>",
-        "style_overrides": {
-            "questionmark": "#FF9900 bold",
-            "answer": "#00FF00 bold",
-            "input": "#00FF00",
-            "pointer": "#FF9900 bold",
-            "marker": "#FF9900",
-            "instruction": "dim #00FF00",
-        },
-    },
-    "Matrix": {
-        "primary": "#00FF41",
-        "border": "#008F11",
-        "pointer": "=>",
-        "style_overrides": {
-            "questionmark": "#00FF41 bold",
-            "answer": "#00FF41 bold",
-            "input": "#00FF41",
-            "pointer": "#00FF41 bold",
-            "marker": "#00FF41",
-            "instruction": "dim #008F11",
-        },
-    },
-    "Cyberpunk": {
-        "primary": "#00E5FF",
-        "border": "#FF007F",
-        "pointer": "⚡ ",
-        "style_overrides": {
-            "questionmark": "#00E5FF bold",
-            "answer": "#00E5FF bold",
-            "input": "white",
-            "pointer": "#FF007F bold",
-            "marker": "#00E5FF",
-            "instruction": "dim #FF007F",
-        },
-    },
-    "Dracula": {
-        "primary": "#BD93F9",
-        "border": "#6272A4",
-        "pointer": "▶ ",
-        "style_overrides": {
-            "questionmark": "#BD93F9 bold",
-            "answer": "#50FA7B bold",
-            "input": "white",
-            "pointer": "#FF79C6 bold",
-            "marker": "#BD93F9",
-            "instruction": "dim #6272A4",
-        },
-    },
-    "Nord Frost": {
-        "primary": "#88C0D0",
-        "border": "#4C566A",
-        "pointer": "❄ ",
-        "style_overrides": {
-            "questionmark": "#88C0D0 bold",
-            "answer": "#81A1C1 bold",
-            "input": "white",
-            "pointer": "#88C0D0 bold",
-            "marker": "#81A1C1",
-            "instruction": "dim #4C566A",
-        },
-    },
-    "Tokyo Night": {
-        "primary": "#7AA2F7",
-        "border": "#3B4261",
-        "pointer": "🌊 ",
-        "style_overrides": {
-            "questionmark": "#7AA2F7 bold",
-            "answer": "#7DCFFF bold",
-            "input": "white",
-            "pointer": "#BB9AF7 bold",
-            "marker": "#7AA2F7",
-            "instruction": "dim #3B4261",
-        },
-    },
-    "Catppuccin": {
-        "primary": "#F5C2E7",
-        "border": "#585B70",
-        "pointer": "🌸 ",
-        "style_overrides": {
-            "questionmark": "#F5C2E7 bold",
-            "answer": "#89B4FA bold",
-            "input": "white",
-            "pointer": "#F5C2E7 bold",
-            "marker": "#CBA6F7",
-            "instruction": "dim #585B70",
-        },
-    },
-}
+from themes import THEMES  # CLI ve GUI için ortak tema listesi
 
 # --------------------------------------------------------------------------- ayarlar
 DEFAULT_SETTINGS = {
@@ -384,8 +224,23 @@ def pause_message(markup, seconds=1.5):
 
 def copy_to_clipboard(text):
     try:
-        subprocess.run(["clip"], input=text.encode("utf-16"), check=True, timeout=5)
-        return True
+        if sys.platform == "win32":
+            subprocess.run(["clip"], input=text.encode("utf-16"), check=True, timeout=5)
+            return True
+        elif sys.platform == "darwin":
+            subprocess.run(["pbcopy"], input=text.encode("utf-8"), check=True, timeout=5)
+            return True
+        else:
+            if shutil.which("wl-copy"):
+                subprocess.run(["wl-copy"], input=text.encode("utf-8"), check=True, timeout=5)
+                return True
+            elif shutil.which("xclip"):
+                subprocess.run(["xclip", "-selection", "clipboard"], input=text.encode("utf-8"), check=True, timeout=5)
+                return True
+            elif shutil.which("xsel"):
+                subprocess.run(["xsel", "--clipboard", "--input"], input=text.encode("utf-8"), check=True, timeout=5)
+                return True
+            return False
     except Exception:
         logger.debug("Panoya kopyalanamadı", exc_info=True)
         return False
@@ -1609,7 +1464,7 @@ def theme_menu():
 
         for name, data in all_themes.items():
             is_active = name == cur_theme
-            active_mark = f"[bold green]✓ AKTİF[/]" if is_active else ""
+            active_mark = "[bold green]✓ AKTİF[/]" if is_active else ""
             p_col = data["primary"]
             b_col = data.get("border", "#555555")
             table.add_row(

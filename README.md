@@ -11,14 +11,17 @@ Python kullanılarak tamamen sıfırdan geliştirilmiş, YouTube Music'ten doğr
 ## Özellikler
 
 - 🎨 **Gelişmiş TUI Dashboard & Zengin Arayüz:** Modern kutulu (`rich`) gösterge paneli, sistem rozetleri, anlık istatistikler ve görsel tema galerisi (Spotify, YouTube Music, Apple Music, Cyberpunk, Dracula, Nord Frost, Tokyo Night, Catppuccin, Winamp Retro, Matrix ve **Kişisel Tema Editörü**).
-- 🖥️ **Masaüstü Grafik Arayüzü (GUI):** PyQt6 tabanlı, şarkı sözleri, mikrofonla sesli arama ve modern karanlık tema destekli masaüstü oynatıcı (`gui.py`).
+- 🖥️ **Masaüstü Grafik Arayüzü (GUI):** PyQt6 tabanlı, katlanabilir modern navbar panelleri (Rail UI), şarkı sözleri, mikrofonla sesli arama, dinamik temalar ve offline kütüphane desteği (`gui.py`).
+- ⬇️ **İndirilenler & Çevrimdışı Kütüphane:** Şarkıları tek tıkla arka planda yerel diske indirme ve internet bağlantısı olmadan doğrudan dinleme.
 - 🔍 **Zengin Tablolu Arama & Müzik Keşfi:** Arama geçmişi etiketleri, detaylı şarkı listesi tablosu, tek tıkla tümünü çalma, karıştırma ve akıllı radyo entegrasyonu.
+- 📻 **Akıllı Öneriler (Radyo Modu):** Şarkı veya çalma listelerinden esinlenen benzer parçaları otomatik keşfetme ve dinamik radyo başlatma.
 - 🖼️ **Gerçek Piksel Kapak Resmi:** Sixel destekli terminallerde (Windows Terminal, iTerm2, WezTerm, Foot, Kitty vb.) kapak, karakter bloklarına indirgenmeden görüntülenir. Kaynak kapak 1024×1024 olarak istenir ve ekrandaki alana göre ölçeklenir. Sixel olmayan terminallerde renkli yarım blok görünümüne, `C` ile Retro Braille moduna geçilir.
 - 🌊 **Dinamik Ses Spektrumu (Visualizer):** Çalan parçanın ritmine duyarlı çok frekanslı harmonik ekolayzer dalgaları ve tepe seviye göstergeleri.
 - 📺 **Mini Player Modu:** Terminal penceresi küçüldüğünde veya `M` tuşuna basıldığında az yer kaplayan 3 satırlık kompakt kontrol şeridi.
 - 🎵 **Veri Akışı (Streaming):** Şarkıyı indirmeden canlı akış üzerinden oynatır.
 - 🎤 **Senkronize Şarkı Sözleri (Karaoke):** Zamanlamalı, parlayan aktif satır gösterimli karaoke söz modu.
-- 📂 **Çalma Listeleri & Önizleme:** Şarkı sayısı, parça listesi önizleme tablosu, favoriler, özel listeler, karışık çalma, akıllı öneriler ve bulut paylaşımı.
+- 📂 **Çalma Listeleri & Önizleme:** Şarkı sayısı, parça listesi önizleme tablosu, favoriler, özel listeler, karışık çalma, akıllı öneriler ve **dpaste üzerinden tek tıkla bulut paylaşımı/içe aktarımı**.
+- 🕒 **Yakın Zamanda Çalınanlar:** Son dinlenen parçalar geçmişi, tek tıkla tüm geçmişi oynatma ve yönetme.
 - 🔔 **Yerel Sistem Bildirimleri:** Windows'ta Windows 11 bildirimleri, macOS'ta yerel Bildirim Merkezi (`osascript`), Linux'ta `notify-send`.
 
 ---

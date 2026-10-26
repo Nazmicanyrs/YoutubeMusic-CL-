@@ -8,7 +8,6 @@ Mikrofon seçim desteği, konsol ses debug takibi ve dinamik karaoke motoru.
 
 import getpass
 import io
-import json
 import logging
 import math
 import os
@@ -16,38 +15,25 @@ import platform
 import re
 import subprocess
 import sys
-import threading
 import time
 import wave
-from collections import deque
-from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import (
-    QEvent,
-    QObject,
-    QPoint,
-    QRect,
+    QEasingCurve,
+    QPropertyAnimation,
     QSize,
     Qt,
     QThread,
     QTimer,
     pyqtSignal,
-    pyqtSlot,
 )
 from PyQt6.QtGui import (
-    QAction,
-    QBrush,
     QColor,
-    QCursor,
     QFont,
-    QFontMetrics,
-    QIcon,
     QKeySequence,
-    QLinearGradient,
     QPainter,
     QPainterPath,
-    QPen,
     QPixmap,
     QShortcut,
 )
@@ -57,12 +43,12 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QFrame,
     QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -70,15 +56,10 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QScrollArea,
     QSlider,
-    QSpacerItem,
-    QSizePolicy,
-    QSplitter,
     QStackedWidget,
-    QStyle,
     QStyledItemDelegate,
     QTableWidget,
     QTableWidgetItem,
@@ -88,7 +69,6 @@ from PyQt6.QtWidgets import (
 
 import qtawesome as qta
 import requests
-from PIL import Image
 
 try:
     import sounddevice as sd
@@ -105,16 +85,22 @@ except Exception:
     SPEECH_REC_AVAILABLE = False
 
 # CLI ve Çekirdek Servisler
-from api_service import MusicAPI, MusicAPIError
+from api_service import MusicAPI
+from cloud_share import download_playlists, upload_playlist
+from download_service import DownloadError, DownloadService
+from global_hotkeys import GlobalHotkeys
+from gui_dialogs import (
+    GUI_BASE_ACCENT,
+    HelpDialog,
+    ThemeDialog,
+    accent_for_theme,
+    base_palette,
+    build_palette,
+    recolor_text,
+)
 from player_service import PlayerService
 from playlist_service import PlaylistManager
-from song_utils import (
-    clean_text,
-    make_song,
-    parse_duration_ms,
-    sanitize_song,
-    upscale_thumbnail,
-)
+from song_utils import sanitize_song
 from storage import data_path, load_json, save_json_atomic
 
 try:
@@ -137,6 +123,23 @@ SETTINGS_FILE = data_path("settings.json")
 HISTORY_FILE = data_path("history.json")
 FAVORITES_NAME = "Favorilerim"
 IMAGE_HEADERS = {"User-Agent": "Mozilla/5.0"}
+DOWNLOADS_NAME = "İndirilenler"
+RECENT_NAME = "Yakın Zamanda Çalınanlar"
+RECENT_FILE = data_path("recent.json")
+ACCENT = GUI_BASE_ACCENT  # aktif tema vurgu rengi (başlangıçta ayarlardan okunur)
+
+
+def set_accent(color):
+    global ACCENT
+    ACCENT = color
+
+
+def _accent_alpha(alpha):
+    c = QColor(ACCENT)
+    c.setAlpha(alpha)
+    return c
+
+
 _LRC_TS = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
 
 
@@ -441,11 +444,11 @@ class KaraokeItemDelegate(QStyledItemDelegate):
         if state == "active":
             bg_path = QPainterPath()
             bg_path.addRoundedRect(float(rect.x() + 4), float(rect.y() + 2), float(rect.width() - 8), float(rect.height() - 4), 8.0, 8.0)
-            painter.fillPath(bg_path, QColor(30, 215, 96, 35))
+            painter.fillPath(bg_path, _accent_alpha(35))
 
             font = QFont("Segoe UI", 22, QFont.Weight.Bold)
             painter.setFont(font)
-            painter.setPen(QColor("#1ED760"))
+            painter.setPen(QColor(ACCENT))
             painter.drawText(rect.adjusted(16, 0, -16, 0), Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, f"♪  {text}")
         elif state == "past":
             font = QFont("Segoe UI", 18, QFont.Weight.Normal)
@@ -569,16 +572,17 @@ def get_clean_microphones():
 # Uygulama & Mikrofon Ayarları İletişim Kutusu (SettingsDialog)
 # ---------------------------------------------------------------------------
 class SettingsDialog(QDialog):
-    def __init__(self, current_device_index=None, current_user_name="", parent=None):
+    def __init__(self, current_device_index=None, current_user_name="", settings=None, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Ayarlar & Mikrofon")
-        self.setFixedWidth(460)
+        self.setFixedWidth(480)
         self.setStyleSheet(MODERN_STYLE)
-        self.selected_device_index = current_device_index
-        self.user_name = current_user_name or get_default_username()
+        self.settings = settings or {}
+        self.selected_device_index = current_device_index if current_device_index is not None else self.settings.get("selected_microphone_index")
+        self.user_name = current_user_name or self.settings.get("user_name") or get_default_username()
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(16)
+        layout.setSpacing(14)
         layout.setContentsMargins(24, 22, 24, 22)
 
         # Başlık
@@ -633,11 +637,51 @@ class SettingsDialog(QDialog):
         btn_default_pc.clicked.connect(self._reset_to_pc_name)
         user_input_layout.addWidget(btn_default_pc)
         user_section.addLayout(user_input_layout)
-
-        desc_user = QLabel("Ana ekranda 'İyi akşamlar', 'Günaydın' mesajlarının altında bu isim görünür.")
-        desc_user.setStyleSheet("font-size: 11px; color: #8C9990;")
-        user_section.addWidget(desc_user)
         layout.addLayout(user_section)
+
+        # 2. BÖLÜM: Oynatma & Bildirim Seçenekleri (CLI Özellikleri)
+        opt_section = QVBoxLayout()
+        opt_section.setSpacing(8)
+        lbl_opt = QLabel("🎧 Ses ve Bildirim Tercihleri:")
+        lbl_opt.setStyleSheet("font-size: 13px; font-weight: 600; color: #FFFFFF;")
+        opt_section.addWidget(lbl_opt)
+
+        self.chk_norm = QCheckBox("Ses Normalizasyonu (Otomatik Ses Dengeleme - normvol)")
+        self.chk_norm.setChecked(self.settings.get("normalization", True))
+        self.chk_norm.setStyleSheet("QCheckBox { color: #E6E6E6; font-size: 12px; } QCheckBox::indicator:checked { background-color: #1ED760; }")
+        opt_section.addWidget(self.chk_norm)
+
+        self.chk_notif = QCheckBox("Masaüstü Bildirimleri (Şarkı değiştiğinde bildirim göster)")
+        self.chk_notif.setChecked(self.settings.get("notifications_enabled", True))
+        self.chk_notif.setStyleSheet("QCheckBox { color: #E6E6E6; font-size: 12px; } QCheckBox::indicator:checked { background-color: #1ED760; }")
+        opt_section.addWidget(self.chk_notif)
+        layout.addLayout(opt_section)
+
+        # 3. BÖLÜM: Tema Galerisi
+        theme_row = QHBoxLayout()
+        lbl_theme = QLabel(f"🎨 Aktif Tema: <b style='color:#1ED760'>{self.settings.get('theme', 'Spotify')}</b>")
+        lbl_theme.setStyleSheet("font-size: 12px; color: #FFFFFF;")
+        btn_theme = QPushButton("Tema Galerisi & Editörü...")
+        btn_theme.setStyleSheet("""
+            QPushButton {
+                background-color: #16201B;
+                border: 1px solid #25362E;
+                border-radius: 6px;
+                padding: 6px 14px;
+                color: #1ED760;
+                font-size: 12px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #1D2A24;
+                color: #FFFFFF;
+            }
+        """)
+        btn_theme.clicked.connect(self._open_theme_gallery)
+        theme_row.addWidget(lbl_theme)
+        theme_row.addStretch()
+        theme_row.addWidget(btn_theme)
+        layout.addLayout(theme_row)
 
         # Ayırıcı çizgi
         line = QFrame()
@@ -645,7 +689,7 @@ class SettingsDialog(QDialog):
         line.setStyleSheet("background-color: #1A2620; max-height: 1px;")
         layout.addWidget(line)
 
-        # 2. BÖLÜM: Mikrofon Seçimi
+        # 4. BÖLÜM: Mikrofon Seçimi
         mic_section = QVBoxLayout()
         mic_section.setSpacing(6)
         lbl_mic = QLabel("🎙️ Sesli Arama İçin Mikrofon:")
@@ -692,7 +736,7 @@ class SettingsDialog(QDialog):
         mic_section.addWidget(desc_mic)
         layout.addLayout(mic_section)
 
-        layout.addSpacing(6)
+        layout.addSpacing(4)
 
         # Alt Butonlar
         btn_box = QHBoxLayout()
@@ -740,10 +784,18 @@ class SettingsDialog(QDialog):
         pc_name = get_default_username()
         self.user_name_input.setText(pc_name)
 
+    def _open_theme_gallery(self):
+        win = self.window()
+        if hasattr(win, "open_theme_dialog"):
+            win.open_theme_dialog()
+            self.accept()
+
     def _on_accept(self):
         self.selected_device_index = self.device_combo.currentData()
         name = self.user_name_input.text().strip()
         self.user_name = name if name else get_default_username()
+        self.normalization = self.chk_norm.isChecked()
+        self.notifications_enabled = self.chk_notif.isChecked()
         self.accept()
 
 
@@ -858,7 +910,7 @@ class VoiceSearchWorker(QThread):
                     break
 
             if audio_data is None:
-                raise RuntimeError(f"Mikrofon desteklenen hiçbir hız veya arabirimde açılamadı.")
+                raise RuntimeError("Mikrofon desteklenen hiçbir hız veya arabirimde açılamadı.")
 
             if self._is_cancelled:
                 print(" [VOICE SEARCH DEBUG] Sesli arama kullanıcı tarafından kapatıldı / iptal edildi.", flush=True)
@@ -975,6 +1027,43 @@ class ResolveStreamWorker(QThread):
             self.error_occurred.emit(self.song, str(e))
 
 
+class FuncWorker(QThread):
+    """Herhangi bir (ağ) işlevini arka planda çalıştırır; sonuç/hata sinyalle döner."""
+    done = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, func, *args):
+        super().__init__()
+        self.func = func
+        self.args = args
+
+    def run(self):
+        try:
+            self.done.emit(self.func(*self.args))
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class DownloadWorker(QThread):
+    progress = pyqtSignal(str, int)
+    finished_ok = pyqtSignal(dict)
+    failed = pyqtSignal(dict, str)
+
+    def __init__(self, service, song, base_opts):
+        super().__init__()
+        self.service = service
+        self.song = song
+        self.base_opts = base_opts
+
+    def run(self):
+        try:
+            vid = self.song["videoId"]
+            self.service.download(self.song, self.base_opts, lambda pct: self.progress.emit(vid, pct))
+            self.finished_ok.emit(self.song)
+        except DownloadError as e:
+            self.failed.emit(self.song, str(e))
+
+
 class LyricsWorker(QThread):
     lyrics_ready = pyqtSignal(str, str)
 
@@ -1052,7 +1141,7 @@ class RoundedImageWidget(QWidget):
             painter.drawPixmap(x, y, scaled)
         else:
             painter.fillRect(rect, QColor("#141F18"))
-            painter.setPen(QColor("#1ED760"))
+            painter.setPen(QColor(ACCENT))
             font = painter.font()
             pt_size = max(1, self.width() // 3)
             font.setPointSize(pt_size)
@@ -1192,6 +1281,13 @@ class HeroBannerWidget(QFrame):
         self.profile_badge.setText(initial)
 
 
+def _open_song_menu(widget, song, event):
+    """Kart sağ tık menüsü: işlemler ana pencerede toplanır."""
+    win = widget.window()
+    if hasattr(win, "show_song_menu"):
+        win.show_song_menu(song, event.globalPos())
+
+
 class QuickMixBannerCard(QFrame):
     clicked = pyqtSignal(dict)
     play_clicked = pyqtSignal(dict)
@@ -1267,6 +1363,9 @@ class QuickMixBannerCard(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             self.clicked.emit(self.song)
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        _open_song_menu(self, self.song, event)
 
 
 class MusicGridCard(QFrame):
@@ -1367,13 +1466,21 @@ class MusicGridCard(QFrame):
             self.clicked.emit(self.song)
         super().mousePressEvent(event)
 
+    def contextMenuEvent(self, event):
+        _open_song_menu(self, self.song, event)
+
 
 # ---------------------------------------------------------------------------
 # Ana Masaüstü Penceresi (yt-music-gui)
 # ---------------------------------------------------------------------------
 class YtMusicGuiApp(QMainWindow):
+    LEFT_PANEL_WIDTH = 270
+    RIGHT_PANEL_WIDTH = 320
+    RAIL_WIDTH = 44
+
     def __init__(self):
         super().__init__()
+        self._panel_anims = {}
         self.setWindowTitle("yt-music-gui")
         self.resize(1340, 880)
         self.setMinimumSize(1080, 720)
@@ -1381,6 +1488,7 @@ class YtMusicGuiApp(QMainWindow):
         # Servisler
         self.api = MusicAPI()
         self.playlist_mgr = PlaylistManager()
+        self.download_svc = DownloadService()
         self.settings = self._load_settings()
         self.player = PlayerService(
             normalization=self.settings.get("normalization", True),
@@ -1392,6 +1500,10 @@ class YtMusicGuiApp(QMainWindow):
         self.queue = []
         self.queue_index = -1
         self.history = self._load_history()
+        self.recent_songs = self._load_recent()
+        self.current_view_name = "home"
+        self.hotkeys = GlobalHotkeys(self)
+        self.hotkeys.action.connect(self._on_global_hotkey)
         self.is_seeking = False
         self.is_shuffle = False
         self.repeat_mode = "none"
@@ -1407,9 +1519,10 @@ class YtMusicGuiApp(QMainWindow):
         self.timer.start()
 
         # UI & Kısayollar
-        self.setStyleSheet(MODERN_STYLE)
         self._build_interface()
         self._setup_shortcuts()
+        self._apply_initial_panel_states()
+        self.apply_theme()
 
         # Başlangıç Yüklemesi
         self.load_featured_and_home()
@@ -1467,33 +1580,76 @@ class YtMusicGuiApp(QMainWindow):
         main_vbox.setContentsMargins(8, 8, 8, 0)
         main_vbox.setSpacing(8)
 
-        body_splitter = QSplitter(Qt.Orientation.Horizontal)
-        body_splitter.setHandleWidth(0)
+        # Yan paneller animasyonla açılıp kapandığı için splitter yerine yatay düzen kullanılır.
+        body_row = QHBoxLayout()
+        body_row.setContentsMargins(0, 0, 0, 0)
+        body_row.setSpacing(0)
 
-        # 1. Sol Panel
+        # 1. Sol navbar şeridi + Sol Panel
+        self.left_rail = self._make_rail("left")
+        body_row.addWidget(self.left_rail, stretch=0)
+        body_row.addSpacing(4)
         self.left_sidebar = self._build_left_sidebar()
-        body_splitter.addWidget(self.left_sidebar)
+        body_row.addWidget(self.left_sidebar, stretch=0)
 
         # 2. Orta Panel
         self.center_frame = self._build_center_frame()
-        body_splitter.addWidget(self.center_frame)
+        body_row.addWidget(self.center_frame, stretch=1)
 
-        # 3. Sağ Panel ("Şimdi Çalıyor" & Mini Player)
+        # 3. Sağ Panel ("Şimdi Çalıyor" & Mini Player) + Sağ navbar şeridi
         self.right_panel = self._build_right_panel()
-        body_splitter.addWidget(self.right_panel)
+        body_row.addWidget(self.right_panel, stretch=0)
+        body_row.addSpacing(4)
+        self.right_rail = self._make_rail("right")
+        body_row.addWidget(self.right_rail, stretch=0)
 
-        body_splitter.setSizes([260, 720, 340])
-        main_vbox.addWidget(body_splitter, stretch=1)
+        main_vbox.addLayout(body_row, stretch=1)
 
         # 4. Alt Oynatıcı Barı
         self.bottom_bar = self._build_bottom_player_bar()
         main_vbox.addWidget(self.bottom_bar, stretch=0)
 
+    # ----------------------------------------------------------------------- Navbar Şeritleri
+    def _make_rail(self, which):
+        """Panelin yanında her zaman görünen, aç/kapa düğmeli ince navbar şeridi."""
+        rail = QFrame()
+        rail.setObjectName(f"{which}Rail")
+        rail.setFixedWidth(self.RAIL_WIDTH)
+        rail.setStyleSheet(
+            f"QFrame#{which}Rail {{ background-color: #0E1210; border-radius: 12px; }}"
+            "QPushButton { background: transparent; border: none; border-radius: 10px; }"
+            "QPushButton:hover { background-color: #1A2620; }"
+        )
+        lay = QVBoxLayout(rail)
+        lay.setContentsMargins(4, 12, 4, 12)
+        lay.setSpacing(8)
+        lay.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+
+        def rail_btn(icon, tip, slot):
+            btn = QPushButton()
+            btn.setIcon(qta.icon(icon, color=ACCENT))
+            btn.setIconSize(QSize(18, 18))
+            btn.setFixedSize(36, 36)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setToolTip(tip)
+            btn.clicked.connect(slot)
+            lay.addWidget(btn)
+            return btn
+
+        if which == "left":
+            self.left_toggle_btn = rail_btn("fa5s.bars", "Sol menüyü aç / kapat (Ctrl+B)", lambda: self.toggle_panel("left"))
+            rail_btn("fa5s.home", "Ana Sayfa", self.show_home_view)
+            rail_btn("fa5s.search", "Arama", self.show_search_view)
+        else:
+            self.right_toggle_btn = rail_btn("fa5s.music", "Şimdi Çalıyor panelini aç / kapat (Ctrl+J)", lambda: self.toggle_panel("right"))
+        return rail
+
     # ----------------------------------------------------------------------- Sol Kenar Çubuğu
     def _build_left_sidebar(self):
         frame = QFrame()
         frame.setObjectName("sidebarFrame")
-        frame.setFixedWidth(270)
+        frame.setMinimumWidth(0)
+        frame.setMaximumWidth(self.LEFT_PANEL_WIDTH)
 
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(14, 16, 14, 14)
@@ -1502,7 +1658,7 @@ class YtMusicGuiApp(QMainWindow):
         # Logo: Yeşil ses dalgası + yt.music-gui
         logo_box = QHBoxLayout()
         logo_icon = QLabel()
-        logo_icon.setPixmap(qta.icon("fa5s.music", color="#1ED760").pixmap(20, 20))
+        logo_icon.setPixmap(qta.icon("fa5s.music", color=ACCENT).pixmap(20, 20))
         logo_box.addWidget(logo_icon)
 
         brand_lbl = QLabel("yt.music-gui")
@@ -1535,6 +1691,7 @@ class YtMusicGuiApp(QMainWindow):
         lib_head.addStretch()
 
         add_btn = QPushButton("+")
+        add_btn.setToolTip("Yeni Liste veya Buluttan İndir")
         add_btn.setFixedSize(26, 26)
         add_btn.setStyleSheet("""
             QPushButton {
@@ -1548,7 +1705,7 @@ class YtMusicGuiApp(QMainWindow):
                 color: #FFFFFF;
             }
         """)
-        add_btn.clicked.connect(self._create_playlist_dialog)
+        add_btn.clicked.connect(self._on_library_add_clicked)
         lib_head.addWidget(add_btn)
         layout.addLayout(lib_head)
 
@@ -1578,7 +1735,7 @@ class YtMusicGuiApp(QMainWindow):
 
         # Beğenilen Şarkılar Kartı (Mavi yuvarlak kalp)
         self.btn_fav_access = QPushButton("  Beğenilen Şarkılar\n   Çalma Listesi • 0 şarkı")
-        self.btn_fav_access.setIcon(qta.icon("fa5s.heart", color="#1ED760"))
+        self.btn_fav_access.setIcon(qta.icon("fa5s.heart", color=ACCENT))
         self.btn_fav_access.setProperty("class", "quickAccessBtn")
         self.btn_fav_access.clicked.connect(lambda: self.open_playlist_view(FAVORITES_NAME))
         layout.addWidget(self.btn_fav_access)
@@ -1586,18 +1743,19 @@ class YtMusicGuiApp(QMainWindow):
         btn_recent_access = QPushButton("  Yakın Zamanda Çalınanlar")
         btn_recent_access.setIcon(qta.icon("fa5s.history", color="#8A9990"))
         btn_recent_access.setProperty("class", "quickAccessBtn")
-        btn_recent_access.clicked.connect(self.show_home_view)
+        btn_recent_access.clicked.connect(self.open_recent_view)
         layout.addWidget(btn_recent_access)
 
-        btn_dl_access = QPushButton("  İndirilenler")
+        btn_dl_access = QPushButton("  İndirilenler (Çevrimdışı)")
         btn_dl_access.setIcon(qta.icon("fa5s.arrow-circle-down", color="#8A9990"))
         btn_dl_access.setProperty("class", "quickAccessBtn")
+        btn_dl_access.clicked.connect(self.open_downloads_view)
         layout.addWidget(btn_dl_access)
 
         btn_custom_pl = QPushButton("  Oluşturduğun Çalma Listeleri")
         btn_custom_pl.setIcon(qta.icon("fa5s.list-ul", color="#8A9990"))
         btn_custom_pl.setProperty("class", "quickAccessBtn")
-        btn_custom_pl.clicked.connect(lambda: self._filter_library("playlists"))
+        btn_custom_pl.clicked.connect(self.open_playlists_hub)
         layout.addWidget(btn_custom_pl)
 
         layout.addStretch()
@@ -1627,12 +1785,30 @@ class YtMusicGuiApp(QMainWindow):
         v_layout.addWidget(vis_text)
         layout.addWidget(vis_box)
 
-        # En Alt: Ayarlar Butonu
-        btn_settings = QPushButton("  Ayarlar & Mikrofon")
+        # En Alt Butonlar: Ayarlar & Temalar & Rehber
+        bottom_btns = QHBoxLayout()
+        bottom_btns.setSpacing(6)
+
+        btn_settings = QPushButton(" Ayarlar")
         btn_settings.setIcon(qta.icon("fa5s.cog", color="#8A9990"))
         btn_settings.setProperty("class", "quickAccessBtn")
         btn_settings.clicked.connect(self._open_mic_select_dialog)
-        layout.addWidget(btn_settings)
+        bottom_btns.addWidget(btn_settings)
+
+        btn_themes = QPushButton(" Temalar")
+        btn_themes.setIcon(qta.icon("fa5s.palette", color="#8A9990"))
+        btn_themes.setProperty("class", "quickAccessBtn")
+        btn_themes.clicked.connect(self.open_theme_dialog)
+        bottom_btns.addWidget(btn_themes)
+
+        btn_help = QPushButton(" ?")
+        btn_help.setToolTip("Kullanım Rehberi & Kısayollar (F1)")
+        btn_help.setFixedWidth(34)
+        btn_help.setProperty("class", "quickAccessBtn")
+        btn_help.clicked.connect(self.open_help_dialog)
+        bottom_btns.addWidget(btn_help)
+
+        layout.addLayout(bottom_btns)
 
         return frame
 
@@ -1661,11 +1837,17 @@ class YtMusicGuiApp(QMainWindow):
         self.view_search = self._build_search_view()
         self.view_playlist = self._build_playlist_view()
         self.view_lyrics = self._build_lyrics_view()
+        self.view_playlists_hub = self._build_playlists_hub_view()
+        self.view_downloads = self._build_downloads_view()
+        self.view_recent = self._build_recent_view()
 
-        self.stack.addWidget(self.view_home)      # 0
-        self.stack.addWidget(self.view_search)    # 1
-        self.stack.addWidget(self.view_playlist)  # 2
-        self.stack.addWidget(self.view_lyrics)    # 3
+        self.stack.addWidget(self.view_home)          # 0
+        self.stack.addWidget(self.view_search)        # 1
+        self.stack.addWidget(self.view_playlist)      # 2
+        self.stack.addWidget(self.view_lyrics)        # 3
+        self.stack.addWidget(self.view_playlists_hub) # 4
+        self.stack.addWidget(self.view_downloads)     # 5
+        self.stack.addWidget(self.view_recent)        # 6
 
         layout.addWidget(self.stack, stretch=1)
         return frame
@@ -1876,6 +2058,22 @@ class YtMusicGuiApp(QMainWindow):
         self.btn_hero_delete.clicked.connect(self._delete_current_playlist)
         act_bar.addWidget(self.btn_hero_delete)
 
+        self.btn_hero_share = QPushButton()
+        self.btn_hero_share.setIcon(qta.icon("fa5s.share-alt", color="#B3B3B3"))
+        self.btn_hero_share.setFixedSize(36, 36)
+        self.btn_hero_share.setStyleSheet("background: transparent; border: none;")
+        self.btn_hero_share.setToolTip("Listeyi Bulutta Paylaş (dpaste)")
+        self.btn_hero_share.clicked.connect(lambda: self.export_playlist_cloud_action(self.current_playlist_name))
+        act_bar.addWidget(self.btn_hero_share)
+
+        self.btn_hero_radio = QPushButton()
+        self.btn_hero_radio.setIcon(qta.icon("fa5s.broadcast-tower", color="#B3B3B3"))
+        self.btn_hero_radio.setFixedSize(36, 36)
+        self.btn_hero_radio.setStyleSheet("background: transparent; border: none;")
+        self.btn_hero_radio.setToolTip("Bu Listeye Göre Akıllı Öneriler Bul (Radyo)")
+        self.btn_hero_radio.clicked.connect(lambda: self.start_radio_for_playlist(self.current_playlist_name))
+        act_bar.addWidget(self.btn_hero_radio)
+
         act_bar.addStretch()
         layout.addLayout(act_bar)
 
@@ -1936,7 +2134,8 @@ class YtMusicGuiApp(QMainWindow):
     def _build_right_panel(self):
         frame = QFrame()
         frame.setObjectName("rightPanelFrame")
-        frame.setFixedWidth(320)
+        frame.setMinimumWidth(0)
+        frame.setMaximumWidth(self.RIGHT_PANEL_WIDTH)
 
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(16, 16, 16, 16)
@@ -2051,7 +2250,7 @@ class YtMusicGuiApp(QMainWindow):
             prefix = "▶ " if is_active else f"{idx + 1}. "
             item.setText(f"{prefix}{s.get('title', '')} — {s.get('artist', '')}")
             if is_active:
-                item.setForeground(QColor("#1ED760"))
+                item.setForeground(QColor(ACCENT))
                 f = item.font()
                 f.setBold(True)
                 item.setFont(f)
@@ -2462,12 +2661,20 @@ class YtMusicGuiApp(QMainWindow):
 
         is_fav = self.playlist_mgr.contains(FAVORITES_NAME, vid)
         if is_fav:
-            self.bar_heart_btn.setIcon(qta.icon("fa5s.heart", color="#1ED760"))
+            self.bar_heart_btn.setIcon(qta.icon("fa5s.heart", color=ACCENT))
         else:
             self.bar_heart_btn.setIcon(qta.icon("fa5.heart", color="#B3B3B3"))
 
         self._refresh_queue_ui()
         self._load_lyrics_for_song(song)
+
+        self._add_to_recent(song)
+
+        # Çevrimdışı dosya kontrolü: İndirilmişse doğrudan yerelden çal
+        local_path = self.download_svc.path_for(vid)
+        if local_path:
+            self._on_stream_resolved(song, str(local_path), {})
+            return
 
         if self.settings.get("notifications_enabled", True):
             try:
@@ -2562,7 +2769,7 @@ class YtMusicGuiApp(QMainWindow):
         if self.repeat_mode == "none":
             self.bar_repeat_btn.setIcon(qta.icon("fa5s.redo", color="#B3B3B3"))
         elif self.repeat_mode == "all":
-            self.bar_repeat_btn.setIcon(qta.icon("fa5s.redo", color="#1ED760"))
+            self.bar_repeat_btn.setIcon(qta.icon("fa5s.redo", color=ACCENT))
         elif self.repeat_mode == "one":
             self.bar_repeat_btn.setIcon(qta.icon("fa5s.redo-alt", color="#FFA500"))
 
@@ -2571,7 +2778,7 @@ class YtMusicGuiApp(QMainWindow):
             return
         added = self.playlist_mgr.toggle_song(FAVORITES_NAME, self.current_song)
         if added:
-            self.bar_heart_btn.setIcon(qta.icon("fa5s.heart", color="#1ED760"))
+            self.bar_heart_btn.setIcon(qta.icon("fa5s.heart", color=ACCENT))
         else:
             self.bar_heart_btn.setIcon(qta.icon("fa5.heart", color="#B3B3B3"))
         self._refresh_library_list()
@@ -2799,12 +3006,654 @@ class YtMusicGuiApp(QMainWindow):
         QShortcut(QKeySequence("Ctrl+K"), self, lambda: self.hero_banner.search_input.setFocus())
         QShortcut(QKeySequence("Ctrl+F"), self, lambda: self.hero_banner.search_input.setFocus())
         QShortcut(QKeySequence("Ctrl+L"), self, self.show_lyrics_view)
+        QShortcut(QKeySequence("Ctrl+B"), self, lambda: self.toggle_panel("left"))
+        QShortcut(QKeySequence("Ctrl+J"), self, lambda: self.toggle_panel("right"))
+        QShortcut(QKeySequence(Qt.Key.Key_F1), self, self.open_help_dialog)
+        QShortcut(QKeySequence("Ctrl+T"), self, self.open_theme_dialog)
+        QShortcut(QKeySequence("Ctrl+P"), self, lambda: self.add_to_playlist_dialog(self.current_song) if self.current_song else None)
+        QShortcut(QKeySequence("Ctrl+R"), self, lambda: self.start_radio_for_song(self.current_song) if self.current_song else None)
+        QShortcut(QKeySequence("Ctrl+S"), self, lambda: self.download_song_action(self.current_song) if self.current_song else None)
+
+    # ----------------------------------------------------------------------- Açılıp Kapanan Paneller
+    def _panel_info(self, which):
+        if which == "left":
+            return self.left_sidebar, self.LEFT_PANEL_WIDTH, "left_panel_open"
+        return self.right_panel, self.RIGHT_PANEL_WIDTH, "right_panel_open"
+
+    def _apply_initial_panel_states(self):
+        """Kaydedilmiş panel durumunu animasyonsuz uygular."""
+        for which in ("left", "right"):
+            frame, _width, key = self._panel_info(which)
+            if not self.settings.get(key, True):
+                frame.setMaximumWidth(0)
+                frame.setVisible(False)
+
+    def toggle_panel(self, which):
+        """'left' veya 'right' paneli yumuşak animasyonla açar/kapatır."""
+        frame, width, key = self._panel_info(which)
+        opening = not self.settings.get(key, True)
+        self.settings[key] = opening
+        self._save_settings()
+
+        old = self._panel_anims.get(which)
+        if old is not None:
+            old.stop()
+
+        anim = QPropertyAnimation(frame, b"maximumWidth", self)
+        anim.setDuration(220)
+        anim.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        if opening:
+            frame.setVisible(True)
+            anim.setStartValue(frame.maximumWidth())
+            anim.setEndValue(width)
+        else:
+            anim.setStartValue(frame.maximumWidth())
+            anim.setEndValue(0)
+            anim.finished.connect(lambda f=frame: f.setVisible(False) if f.maximumWidth() == 0 else None)
+        self._panel_anims[which] = anim
+        anim.start()
 
     def set_volume_delta(self, d):
         val = max(0, min(100, self.bar_vol_slider.value() + d))
         self.bar_vol_slider.setValue(val)
 
+
+    # ----------------------------------------------------------------------- CLI Özellikleri & Yeni Görünümler
+    def _on_library_add_clicked(self):
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu { background-color: #121A15; color: #FFFFFF; border: 1px solid #1C2B22; border-radius: 8px; padding: 6px; }
+            QMenu::item { padding: 6px 16px; border-radius: 4px; }
+            QMenu::item:selected { background-color: #1ED760; color: #000000; font-weight: 600; }
+        """)
+        a_new = menu.addAction(qta.icon("fa5s.plus", color="#FFFFFF"), "➕ Yeni Çalma Listesi Oluştur")
+        a_import = menu.addAction(qta.icon("fa5s.cloud-download-alt", color="#FFFFFF"), "📥 Buluttan Liste İndir (dpaste)")
+        pos = self.left_sidebar.mapToGlobal(self.left_sidebar.rect().topLeft())
+        pos.setY(pos.y() + 160)
+        sel = menu.exec(pos)
+        if sel == a_new:
+            self._create_playlist_dialog()
+        elif sel == a_import:
+            self.import_playlist_cloud_dialog()
+
+    def _load_recent(self):
+        data = load_json(RECENT_FILE, [])
+        if not isinstance(data, list):
+            return []
+        cleaned = []
+        for x in data:
+            s = sanitize_song(x)
+            if s:
+                cleaned.append(s)
+        return cleaned[:100]
+
+    def _add_to_recent(self, song):
+        song = sanitize_song(song)
+        if not song:
+            return
+        vid = song["videoId"]
+        self.recent_songs = [s for s in self.recent_songs if s.get("videoId") != vid]
+        self.recent_songs.insert(0, song)
+        self.recent_songs = self.recent_songs[:100]
+        try:
+            save_json_atomic(RECENT_FILE, self.recent_songs)
+        except Exception:
+            pass
+
+    def apply_theme(self):
+        acc = accent_for_theme(self.settings)
+        set_accent(acc)
+        pal = build_palette(acc)
+        new_qss = recolor_text(MODERN_STYLE, base_palette(), pal)
+        self.setStyleSheet(new_qss)
+        if hasattr(self, "hero_banner") and hasattr(self.hero_banner, "name_lbl"):
+            self.hero_banner.name_lbl.setStyleSheet(f"font-size: 34px; font-weight: 900; color: {acc}; letter-spacing: -0.5px;")
+
+    def open_theme_dialog(self):
+        dlg = ThemeDialog(self.settings, self._save_settings, parent=self)
+        dlg.theme_applied.connect(self.apply_theme)
+        dlg.exec()
+
+    def open_help_dialog(self):
+        dlg = HelpDialog(parent=self)
+        dlg.exec()
+
+    def _on_global_hotkey(self, action):
+        if action == "playpause":
+            self.toggle_play_pause()
+        elif action == "next":
+            self.play_next()
+        elif action == "prev":
+            self.play_previous()
+        elif action == "vol_up":
+            self.set_volume_delta(5)
+        elif action == "vol_down":
+            self.set_volume_delta(-5)
+        elif action == "like":
+            self._toggle_current_favorite()
+
+    # ----------------------------------------------------------------------- Şarkı Sağ Tık Menüsü
+    def show_song_menu(self, song, global_pos):
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu { background-color: #121A15; color: #FFFFFF; border: 1px solid #1C2B22; border-radius: 8px; padding: 6px; }
+            QMenu::item { padding: 6px 18px; border-radius: 4px; }
+            QMenu::item:selected { background-color: #1ED760; color: #000000; font-weight: 600; }
+        """)
+        a_play = menu.addAction(qta.icon("fa5s.play", color="#FFFFFF"), "Hemen Çal")
+        a_queue = menu.addAction(qta.icon("fa5s.list", color="#FFFFFF"), "Sıraya Ekle")
+        a_add_pl = menu.addAction(qta.icon("fa5s.plus", color="#FFFFFF"), "Çalma Listesine Ekle...")
+
+        vid = song.get("videoId")
+        is_dl = self.download_svc.is_downloaded(vid)
+        dl_text = "İndirilenlerden Sil" if is_dl else "Şarkıyı İndir (Çevrimdışı)"
+        dl_icon = "fa5s.trash-alt" if is_dl else "fa5s.download"
+        a_dl = menu.addAction(qta.icon(dl_icon, color="#FFFFFF"), dl_text)
+
+        is_fav = self.playlist_mgr.contains(FAVORITES_NAME, vid)
+        fav_text = "Favorilerden Çıkar" if is_fav else "Favorilere Ekle"
+        a_fav = menu.addAction(qta.icon("fa5s.heart", color="#FF3B30" if is_fav else "#FFFFFF"), fav_text)
+
+        a_radio = menu.addAction(qta.icon("fa5s.broadcast-tower", color="#FFFFFF"), "Akıllı Öneriler Bul (Radyo)")
+        a_copy = menu.addAction(qta.icon("fa5s.copy", color="#FFFFFF"), "YouTube Müzik Linkini Kopyala")
+
+        sel = menu.exec(global_pos)
+        if not sel:
+            return
+        if sel == a_play:
+            self.play_single_song(song)
+        elif sel == a_queue:
+            self.queue.append(song)
+            self._refresh_queue_ui()
+        elif sel == a_add_pl:
+            self.add_to_playlist_dialog(song)
+        elif sel == a_dl:
+            if is_dl:
+                self.download_svc.remove(vid)
+                QMessageBox.information(self, "İndirme Silindi", f"'{song.get('title')}' indirilenlerden kaldırıldı.")
+                if self.current_view_name == "downloads":
+                    self.open_downloads_view()
+            else:
+                self.download_song_action(song)
+        elif sel == a_fav:
+            self.playlist_mgr.toggle_song(FAVORITES_NAME, song)
+            self._refresh_library_list()
+        elif sel == a_radio:
+            self.start_radio_for_song(song)
+        elif sel == a_copy:
+            url = song.get("url") or f"https://music.youtube.com/watch?v={vid}"
+            QApplication.clipboard().setText(url)
+
+    # ----------------------------------------------------------------------- Çalma Listesine Ekleme Diyaloğu
+    def add_to_playlist_dialog(self, song):
+        playlists = list(self.playlist_mgr.get_all().keys())
+        choices = ["➕ Yeni Bir Çalma Listesi Oluştur..."] + playlists
+        item, ok = QInputDialog.getItem(self, "Listeye Ekle", f"'{song.get('title')}' hangi listeye eklensin?", choices, 0, False)
+        if not ok or not item:
+            return
+        if item.startswith("➕"):
+            name, n_ok = QInputDialog.getText(self, "Yeni Liste", "Çalma listesi adı:")
+            if not n_ok or not name.strip():
+                return
+            pl_name = name.strip()
+        else:
+            pl_name = item
+        added = self.playlist_mgr.add_song(pl_name, song)
+        self._refresh_library_list()
+        if added:
+            QMessageBox.information(self, "Eklendi", f"'{song.get('title')}' '{pl_name}' listesine eklendi!")
+        else:
+            QMessageBox.information(self, "Bilgi", f"Bu şarkı zaten '{pl_name}' listesinde var.")
+
+    # ----------------------------------------------------------------------- İndirme İşlemi
+    def download_song_action(self, song):
+        vid = song.get("videoId")
+        if self.download_svc.is_downloaded(vid):
+            QMessageBox.information(self, "Bilgi", f"'{song.get('title')}' zaten indirilmiş durumda.")
+            return
+
+        worker = DownloadWorker(self.download_svc, song, self.player.ydl_opts)
+        worker.finished_ok.connect(lambda s: QMessageBox.information(self, "İndirme Tamamlandı", f"'{s.get('title')}' başarıyla indirildi!\nÇevrimdışı dinleyebilirsiniz."))
+        worker.failed.connect(lambda s, err: QMessageBox.warning(self, "İndirme Başarısız", f"İndirilemedi: {err}"))
+        worker.start()
+        self.active_workers.append(worker)
+        QMessageBox.information(self, "İndirme Başlatıldı", f"'{song.get('title')}' arka planda indiriliyor...")
+
+    # ----------------------------------------------------------------------- Akıllı Öneriler (Radyo)
+    def start_radio_for_song(self, song):
+        vid = song.get("videoId")
+        worker = FuncWorker(self.api.get_recommendations, vid, 25)
+        worker.done.connect(lambda recs: self._on_radio_ready(song, recs))
+        worker.failed.connect(lambda err: QMessageBox.warning(self, "Öneri Hatası", f"Öneriler alınamadı: {err}"))
+        worker.start()
+        self.active_workers.append(worker)
+
+    def start_radio_for_playlist(self, pl_name):
+        songs = self.playlist_mgr.get_songs(pl_name) or []
+        if not songs:
+            QMessageBox.warning(self, "Uyarı", "Bu listede henüz şarkı yok.")
+            return
+        import random
+        seed = random.choice(songs)
+        self.start_radio_for_song(seed)
+
+    def _on_radio_ready(self, seed_song, recs):
+        if not recs:
+            QMessageBox.information(self, "Radyo", "Bu parça için benzer öneri bulunamadı.")
+            return
+        full_queue = [seed_song] + recs
+        self.queue = full_queue
+        self.queue_index = 0
+        self.play_song_at_index(0)
+        QMessageBox.information(self, "Radyo Başlatıldı", f"'{seed_song.get('title')}' parçasına göre {len(recs)} akıllı öneri sıraya eklendi!")
+
+    # ----------------------------------------------------------------------- Bulut Paylaşımı (dpaste)
+    def export_playlist_cloud_action(self, pl_name):
+        songs = self.playlist_mgr.get_songs(pl_name) or []
+        if not songs:
+            QMessageBox.warning(self, "Uyarı", "Boş liste paylaşılamaz.")
+            return
+        confirm = QMessageBox.question(
+            self, "Buluta Yükle",
+            f"'{pl_name}' listesi ({len(songs)} şarkı) herkese açık dpaste.com sitesine yüklenecektir.\nPaylaşım kodunu bilen herkes listeyi görebilir.\nDevam edilsin mi?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+
+        worker = FuncWorker(upload_playlist, pl_name, songs)
+        def _done(code):
+            QApplication.clipboard().setText(code)
+            QMessageBox.information(
+                self, "Liste Paylaşıldı!",
+                f"'{pl_name}' listesi buluta yüklendi!\n\nPaylaşım Kodu: {code}\n(Kod panoya kopyalandı! Arkadaşlarınızla paylaşabilirsiniz.)"
+            )
+        worker.done.connect(_done)
+        worker.failed.connect(lambda err: QMessageBox.warning(self, "Hata", f"Paylaşılamadı: {err}"))
+        worker.start()
+        self.active_workers.append(worker)
+
+    def import_playlist_cloud_dialog(self):
+        code, ok = QInputDialog.getText(self, "Buluttan İçe Aktar", "Paylaşım Kodunu veya dpaste linkini girin:")
+        if not ok or not code.strip():
+            return
+        worker = FuncWorker(download_playlists, code.strip())
+        def _done(res):
+            imported, skipped = res
+            msg = ""
+            for name, songs in imported:
+                final_name = self.playlist_mgr.unique_name(name)
+                c = self.playlist_mgr.add_songs(final_name, songs)
+                msg += f"• '{final_name}' ({c} şarkı)\n"
+            self._refresh_library_list()
+            detail = f"\n{skipped} geçersiz kayıt atlandı." if skipped else ""
+            QMessageBox.information(self, "İçe Aktarma Tamamlandı", f"Başarıyla eklendi:\n{msg}{detail}")
+            if imported:
+                self.open_playlist_view(imported[0][0])
+        worker.done.connect(_done)
+        worker.failed.connect(lambda err: QMessageBox.warning(self, "İçe Aktarma Hatası", str(err)))
+        worker.start()
+        self.active_workers.append(worker)
+
+    # ----------------------------------------------------------------------- Çalma Listeleri Hub Ekranı
+    def _build_playlists_hub_view(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background: transparent; border: none;")
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(24, 20, 24, 24)
+        layout.setSpacing(16)
+
+        header_row = QHBoxLayout()
+        title = QLabel("📂 Çalma Listelerim")
+        title.setStyleSheet("font-size: 26px; font-weight: 800; color: #FFFFFF;")
+        header_row.addWidget(title)
+        header_row.addStretch()
+
+        btn_new = QPushButton("➕ Yeni Liste Oluştur")
+        btn_new.setStyleSheet("background-color: #1ED760; color: #000000; font-weight: 700; border-radius: 6px; padding: 8px 16px;")
+        btn_new.clicked.connect(self._create_playlist_dialog)
+        header_row.addWidget(btn_new)
+
+        btn_imp = QPushButton("📥 Buluttan İndir (dpaste)")
+        btn_imp.setStyleSheet("background-color: #16201B; border: 1px solid #25362E; color: #E6E6E6; font-weight: 600; border-radius: 6px; padding: 8px 16px;")
+        btn_imp.clicked.connect(self.import_playlist_cloud_dialog)
+        header_row.addWidget(btn_imp)
+        layout.addLayout(header_row)
+
+        self.hub_table = QTableWidget()
+        self.hub_table.setColumnCount(4)
+        self.hub_table.setHorizontalHeaderLabels(["Liste Adı", "Şarkı Sayısı", "Tür", "İşlemler"])
+        self.hub_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.hub_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
+        self.hub_table.setColumnWidth(1, 120)
+        self.hub_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.hub_table.setColumnWidth(2, 140)
+        self.hub_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.hub_table.setColumnWidth(3, 160)
+        self.hub_table.verticalHeader().setVisible(False)
+        self.hub_table.verticalHeader().setDefaultSectionSize(48)
+        self.hub_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.hub_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.hub_table.setStyleSheet("background: transparent; border: none;")
+        self.hub_table.cellDoubleClicked.connect(self._on_hub_double_click)
+        layout.addWidget(self.hub_table)
+
+        scroll.setWidget(container)
+        return scroll
+
+    def open_playlists_hub(self):
+        self.current_view_name = "playlists_hub"
+        all_pl = self.playlist_mgr.get_all()
+        self.hub_table.setRowCount(len(all_pl))
+        for row, (name, songs) in enumerate(all_pl.items()):
+            n_item = QTableWidgetItem(f"{'❤️ ' if name == FAVORITES_NAME else '📁 '}{name}")
+            n_item.setData(Qt.ItemDataRole.UserRole, name)
+            self.hub_table.setItem(row, 0, n_item)
+
+            c_item = QTableWidgetItem(f"{len(songs)} şarkı")
+            c_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.hub_table.setItem(row, 1, c_item)
+
+            t_item = QTableWidgetItem("Özel Favoriler" if name == FAVORITES_NAME else "Kullanıcı Listesi")
+            t_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.hub_table.setItem(row, 2, t_item)
+
+            btn_box = QWidget()
+            b_lay = QHBoxLayout(btn_box)
+            b_lay.setContentsMargins(0, 0, 0, 0)
+            b_lay.setSpacing(6)
+
+            btn_play = QPushButton()
+            btn_play.setIcon(qta.icon("fa5s.play", color="#1ED760"))
+            btn_play.setToolTip("Listeyi Çal")
+            btn_play.clicked.connect(lambda _, pl=name: self._play_named_playlist(pl))
+            b_lay.addWidget(btn_play)
+
+            btn_share = QPushButton()
+            btn_share.setIcon(qta.icon("fa5s.share-alt", color="#B3B3B3"))
+            btn_share.setToolTip("Bulutta Paylaş (dpaste)")
+            btn_share.clicked.connect(lambda _, pl=name: self.export_playlist_cloud_action(pl))
+            b_lay.addWidget(btn_share)
+
+            if name != FAVORITES_NAME:
+                btn_del = QPushButton()
+                btn_del.setIcon(qta.icon("fa5s.trash-alt", color="#FF3B30"))
+                btn_del.setToolTip("Listeyi Sil")
+                btn_del.clicked.connect(lambda _, pl=name: self._delete_named_playlist(pl))
+                b_lay.addWidget(btn_del)
+
+            self.hub_table.setCellWidget(row, 3, btn_box)
+
+        self.stack.setCurrentIndex(4)
+
+    def _on_hub_double_click(self, row, col):
+        item = self.hub_table.item(row, 0)
+        if item:
+            name = item.data(Qt.ItemDataRole.UserRole)
+            self.open_playlist_view(name)
+
+    def _play_named_playlist(self, name):
+        songs = self.playlist_mgr.get_songs(name) or []
+        if not songs:
+            QMessageBox.information(self, "Bilgi", "Bu liste boş.")
+            return
+        self.queue = list(songs)
+        self.queue_index = 0
+        self.play_song_at_index(0)
+
+    def _delete_named_playlist(self, name):
+        if QMessageBox.question(self, "Sil", f"'{name}' çalma listesini silmek istediğinize emin misiniz?") == QMessageBox.StandardButton.Yes:
+            self.playlist_mgr.delete_playlist(name)
+            self._refresh_library_list()
+            self.open_playlists_hub()
+
+    # ----------------------------------------------------------------------- İndirilenler Ekranı
+    def _build_downloads_view(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background: transparent; border: none;")
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(24, 20, 24, 24)
+        layout.setSpacing(16)
+
+        header_row = QHBoxLayout()
+        title = QLabel("⬇️ İndirilenler (Çevrimdışı Kütüphane)")
+        title.setStyleSheet("font-size: 26px; font-weight: 800; color: #FFFFFF;")
+        header_row.addWidget(title)
+        header_row.addStretch()
+
+        self.btn_dl_play_all = QPushButton("▶ Tümünü Çal")
+        self.btn_dl_play_all.setStyleSheet("background-color: #1ED760; color: #000000; font-weight: 700; border-radius: 6px; padding: 8px 16px;")
+        self.btn_dl_play_all.clicked.connect(self._play_all_downloads)
+        header_row.addWidget(self.btn_dl_play_all)
+
+        self.btn_dl_open_dir = QPushButton("📁 Klasörü Aç")
+        self.btn_dl_open_dir.setStyleSheet("background-color: #16201B; border: 1px solid #25362E; color: #E6E6E6; font-weight: 600; border-radius: 6px; padding: 8px 16px;")
+        self.btn_dl_open_dir.clicked.connect(self._open_downloads_directory)
+        header_row.addWidget(self.btn_dl_open_dir)
+        layout.addLayout(header_row)
+
+        desc = QLabel("💡 İndirilen şarkılar cihazınızda saklanır ve internet bağlantısı olmadan çevrimdışı oynatılabilir.")
+        desc.setStyleSheet("font-size: 12px; color: #8A9990;")
+        layout.addWidget(desc)
+
+        self.dl_table = QTableWidget()
+        self.dl_table.setColumnCount(5)
+        self.dl_table.setHorizontalHeaderLabels(["#", "Başlık", "Sanatçı", "Süre", "İşlemler"])
+        self.dl_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.dl_table.setColumnWidth(0, 44)
+        self.dl_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.dl_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        self.dl_table.setColumnWidth(2, 220)
+        self.dl_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.dl_table.setColumnWidth(3, 70)
+        self.dl_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.dl_table.setColumnWidth(4, 90)
+        self.dl_table.verticalHeader().setVisible(False)
+        self.dl_table.verticalHeader().setDefaultSectionSize(48)
+        self.dl_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.dl_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.dl_table.setStyleSheet("background: transparent; border: none;")
+        self.dl_table.cellDoubleClicked.connect(self._on_dl_double_click)
+        layout.addWidget(self.dl_table)
+
+        scroll.setWidget(container)
+        return scroll
+
+    def open_downloads_view(self):
+        self.current_view_name = "downloads"
+        songs = self.download_svc.songs()
+        self.dl_table.setRowCount(len(songs))
+        for row, s in enumerate(songs):
+            idx_item = QTableWidgetItem(str(row + 1))
+            idx_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.dl_table.setItem(row, 0, idx_item)
+
+            t_item = QTableWidgetItem(s.get("title", ""))
+            t_item.setData(Qt.ItemDataRole.UserRole, s)
+            self.dl_table.setItem(row, 1, t_item)
+
+            a_item = QTableWidgetItem(s.get("artist", ""))
+            self.dl_table.setItem(row, 2, a_item)
+
+            d_item = QTableWidgetItem(s.get("duration", ""))
+            d_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.dl_table.setItem(row, 3, d_item)
+
+            del_btn = QPushButton()
+            del_btn.setIcon(qta.icon("fa5s.trash-alt", color="#FF3B30"))
+            del_btn.setFixedSize(28, 28)
+            del_btn.setStyleSheet("background: transparent; border: none;")
+            del_btn.setToolTip("İndirilen Dosyayı Sil")
+            del_btn.clicked.connect(lambda _, song=s: self._delete_downloaded_song(song))
+            self.dl_table.setCellWidget(row, 4, del_btn)
+
+        self.stack.setCurrentIndex(5)
+
+    def _on_dl_double_click(self, row, col):
+        item = self.dl_table.item(row, 1)
+        if item:
+            song = item.data(Qt.ItemDataRole.UserRole)
+            songs = self.download_svc.songs()
+            self.queue = songs
+            try:
+                self.queue_index = self.queue.index(song)
+            except ValueError:
+                self.queue_index = row
+            self.play_song_at_index(self.queue_index)
+
+    def _play_all_downloads(self):
+        songs = self.download_svc.songs()
+        if not songs:
+            QMessageBox.information(self, "Bilgi", "Henüz indirilmiş bir şarkı yok.")
+            return
+        self.queue = list(songs)
+        self.queue_index = 0
+        self.play_song_at_index(0)
+
+    def _open_downloads_directory(self):
+        from download_service import DOWNLOAD_DIR
+        DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        import subprocess, sys
+        if sys.platform == "win32":
+            os.startfile(DOWNLOAD_DIR)
+        elif sys.platform == "darwin":
+            subprocess.run(["open", str(DOWNLOAD_DIR)])
+        else:
+            subprocess.run(["xdg-open", str(DOWNLOAD_DIR)])
+
+    def _delete_downloaded_song(self, song):
+        if QMessageBox.question(self, "İndirmeyi Sil", f"'{song.get('title')}' indirilenlerden silinsin mi?") == QMessageBox.StandardButton.Yes:
+            self.download_svc.remove(song["videoId"])
+            self.open_downloads_view()
+
+    # ----------------------------------------------------------------------- Yakın Zamanda Çalınanlar Ekranı
+    def _build_recent_view(self):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background: transparent; border: none;")
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(24, 20, 24, 24)
+        layout.setSpacing(16)
+
+        header_row = QHBoxLayout()
+        title = QLabel("🕒 Yakın Zamanda Çalınanlar")
+        title.setStyleSheet("font-size: 26px; font-weight: 800; color: #FFFFFF;")
+        header_row.addWidget(title)
+        header_row.addStretch()
+
+        btn_play = QPushButton("▶ Tümünü Çal")
+        btn_play.setStyleSheet("background-color: #1ED760; color: #000000; font-weight: 700; border-radius: 6px; padding: 8px 16px;")
+        btn_play.clicked.connect(self._play_all_recent)
+        header_row.addWidget(btn_play)
+
+        btn_clear = QPushButton("🗑️ Geçmişi Temizle")
+        btn_clear.setStyleSheet("background-color: #16201B; border: 1px solid #25362E; color: #E6E6E6; font-weight: 600; border-radius: 6px; padding: 8px 16px;")
+        btn_clear.clicked.connect(self._clear_recent)
+        header_row.addWidget(btn_clear)
+        layout.addLayout(header_row)
+
+        self.recent_table = QTableWidget()
+        self.recent_table.setColumnCount(5)
+        self.recent_table.setHorizontalHeaderLabels(["#", "Başlık", "Sanatçı", "Süre", "İşlemler"])
+        self.recent_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.recent_table.setColumnWidth(0, 44)
+        self.recent_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.recent_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        self.recent_table.setColumnWidth(2, 220)
+        self.recent_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        self.recent_table.setColumnWidth(3, 70)
+        self.recent_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.recent_table.setColumnWidth(4, 90)
+        self.recent_table.verticalHeader().setVisible(False)
+        self.recent_table.verticalHeader().setDefaultSectionSize(48)
+        self.recent_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.recent_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.recent_table.setStyleSheet("background: transparent; border: none;")
+        self.recent_table.cellDoubleClicked.connect(self._on_recent_double_click)
+        layout.addWidget(self.recent_table)
+
+        scroll.setWidget(container)
+        return scroll
+
+    def open_recent_view(self):
+        self.current_view_name = "recent"
+        self.recent_table.setRowCount(len(self.recent_songs))
+        for row, s in enumerate(self.recent_songs):
+            idx_item = QTableWidgetItem(str(row + 1))
+            idx_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.recent_table.setItem(row, 0, idx_item)
+
+            t_item = QTableWidgetItem(s.get("title", ""))
+            t_item.setData(Qt.ItemDataRole.UserRole, s)
+            self.recent_table.setItem(row, 1, t_item)
+
+            a_item = QTableWidgetItem(s.get("artist", ""))
+            self.recent_table.setItem(row, 2, a_item)
+
+            d_item = QTableWidgetItem(s.get("duration", ""))
+            d_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.recent_table.setItem(row, 3, d_item)
+
+            act_box = QWidget()
+            a_lay = QHBoxLayout(act_box)
+            a_lay.setContentsMargins(0, 0, 0, 0)
+            a_lay.setSpacing(4)
+
+            btn_pl = QPushButton()
+            btn_pl.setIcon(qta.icon("fa5s.plus", color="#B3B3B3"))
+            btn_pl.setToolTip("Listeye Ekle")
+            btn_pl.clicked.connect(lambda _, song=s: self.add_to_playlist_dialog(song))
+            a_lay.addWidget(btn_pl)
+
+            btn_dl = QPushButton()
+            btn_dl.setIcon(qta.icon("fa5s.download", color="#B3B3B3"))
+            btn_dl.setToolTip("İndir")
+            btn_dl.clicked.connect(lambda _, song=s: self.download_song_action(song))
+            a_lay.addWidget(btn_dl)
+
+            self.recent_table.setCellWidget(row, 4, act_box)
+
+        self.stack.setCurrentIndex(6)
+
+    def _on_recent_double_click(self, row, col):
+        item = self.recent_table.item(row, 1)
+        if item:
+            song = item.data(Qt.ItemDataRole.UserRole)
+            self.queue = list(self.recent_songs)
+            try:
+                self.queue_index = self.queue.index(song)
+            except ValueError:
+                self.queue_index = row
+            self.play_song_at_index(self.queue_index)
+
+    def _play_all_recent(self):
+        if not self.recent_songs:
+            QMessageBox.information(self, "Bilgi", "Geçmişte çalınan parça bulunmuyor.")
+            return
+        self.queue = list(self.recent_songs)
+        self.queue_index = 0
+        self.play_song_at_index(0)
+
+    def _clear_recent(self):
+        if QMessageBox.question(self, "Geçmişi Temizle", "Son çalınan parçalar geçmişi silinsin mi?") == QMessageBox.StandardButton.Yes:
+            self.recent_songs = []
+            try:
+                save_json_atomic(RECENT_FILE, [])
+            except Exception:
+                pass
+            self.open_recent_view()
+
     def closeEvent(self, event):
+        if hasattr(self, "hotkeys") and self.hotkeys:
+            self.hotkeys.close()
         self.timer.stop()
         self.player.close()
         event.accept()
